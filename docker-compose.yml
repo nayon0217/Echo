@@ -1,0 +1,33 @@
+# Postgres 16 for the ECHO verification corpus (policy.md §2, §3).
+# pg_trgm ships with the official image; schema.sql enables it on first init.
+#
+#   docker compose up -d db      # start
+#   docker compose down          # stop (keeps data)
+#   docker compose down -v       # stop + wipe the volume (fresh schema on next up)
+#
+# schema.sql is mounted into /docker-entrypoint-initdb.d, so it runs
+# automatically the first time the data volume is created. To re-apply it to an
+# existing database without wiping data, use `python -m db.init_db` instead.
+
+services:
+  db:
+    image: postgres:16
+    container_name: echo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-echo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-echo}
+      POSTGRES_DB: ${POSTGRES_DB:-echo}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - echo_pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-echo} -d ${POSTGRES_DB:-echo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  echo_pgdata:

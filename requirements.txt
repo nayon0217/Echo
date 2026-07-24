@@ -1,0 +1,10 @@
+# ECHO verification pipeline (Python side). Pinned loosely; tighten before demo.
+# DB layer only for now — pipeline deps (faster-whisper, fastapi, etc.) get
+# added in later phases per policy.md §12.
+
+psycopg[binary]>=3.2,<4      # Postgres driver (v3), binary build = no local libpq needed
+python-dotenv>=1.0,<2        # load DATABASE_URL and friends from .env
+
+# --- Ingestion (policy.md §3, §13) ---
+trafilatura>=1.12,<3         # HTML -> clean text/markdown extraction
+PyYAML>=6.0,<7               # parse ingest/sources.yaml

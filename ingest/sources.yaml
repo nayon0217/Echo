@@ -1,0 +1,184 @@
+# ECHO fact-check corpus — curated source list (policy.md §3, §13).
+#
+# Manual curation beats scraping at this corpus size. Each entry is one document;
+# ingest/fetch.py fetches it with trafilatura, chunks it heading-aware, and
+# upserts it into Postgres. `title` is auto-derived from page metadata when
+# omitted. `source_url` is the natural key — editing this list and re-running
+# fetch.py upserts rather than duplicating.
+#
+# authority_tier (policy.md §3):
+#   1 = MOM / SPF ScamAlert / CPF / IRAS   (canonical)
+#   2 = TWC2 / Migrant Workers' Centre     (fills gaps MOM doesn't cover)
+#   3 = ST / CNA reporting                 (dating changes only, never sole support)
+#
+# Scope note: this build is the policy fact-checking path (policy.md scope line).
+# SPF ScamAlert (also tier 1) is deferred — the scam path is stubbed, and
+# scamalert.sg's robots.txt sets AI-usage content signals we should honour before
+# ingesting it. Revisit when the scam handler is built.
+
+sources:
+  # --- MOM: Work Permit core (key facts, conditions, lifecycle) ---
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/key-facts
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/work-permit-conditions
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/apply-for-work-permit
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/renew-a-work-permit
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/cancel-a-work-permit
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/appeal-for-renewal
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/get-a-short-extension-for-work-permit
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/notify-mom-of-changes
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/overseas-leave
+  - source_name: MOM
+    authority_tier: 1
+    category: work_permit_core
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/replace-a-card
+
+  # --- MOM: Foreign worker levy ---
+  - source_name: MOM
+    authority_tier: 1
+    category: levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/foreign-worker-levy/what-is-the-foreign-worker-levy
+  - source_name: MOM
+    authority_tier: 1
+    category: levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/foreign-worker-levy/paying-the-levy
+  - source_name: MOM
+    authority_tier: 1
+    category: levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/foreign-worker-levy/skilled-worker-levy
+  - source_name: MOM
+    authority_tier: 1
+    category: levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/foreign-worker-levy/apply-for-levy-waiver
+  - source_name: MOM
+    authority_tier: 1
+    category: levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/foreign-worker-levy/calculate-levy-penalty
+
+  # --- MOM: Sector rules relevant to workers directly ---
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/security-bond
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/security-bond/security-bond-conditions
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/medical-examination
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/medical-insurance
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/six-monthly-medical-examination
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/paying-the-salary
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/settling-in-programme
+  - source_name: MOM
+    authority_tier: 1
+    category: sector_rules
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/sector-specific-rules/construction-sector-requirements
+
+  # --- MOM: Housing & well-being ---
+  - source_name: MOM
+    authority_tier: 1
+    category: housing
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/housing/employers-responsibilities
+  - source_name: MOM
+    authority_tier: 1
+    category: housing
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/housing/migrant-worker-dormitories
+  - source_name: MOM
+    authority_tier: 1
+    category: housing
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/housing/various-types-of-housing
+  - source_name: MOM
+    authority_tier: 1
+    category: wellbeing
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-worker/recreation-well-being-and-other-resources-for-migrant-workers/health-well-being-resources-for-mws
+
+  # --- MOM: Foreign Domestic Worker levy ---
+  - source_name: MOM
+    authority_tier: 1
+    category: fdw_levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/foreign-domestic-worker-levy
+  - source_name: MOM
+    authority_tier: 1
+    category: fdw_levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/foreign-domestic-worker-levy/paying-levy
+  - source_name: MOM
+    authority_tier: 1
+    category: fdw_levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/foreign-domestic-worker-levy/levy-concession
+
+  # --- MOM: S Pass levy/quota (adjacent pass some workers ask about) ---
+  - source_name: MOM
+    authority_tier: 1
+    category: s_pass_levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/s-pass/quota-and-levy/levy-and-quota-requirements
+  - source_name: MOM
+    authority_tier: 1
+    category: s_pass_levy
+    source_url: https://www.mom.gov.sg/passes-and-permits/s-pass/quota-and-levy/paying-the-s-pass-levy
+
+  # --- MOM: Employment practices applying to Work Permit holders ---
+  - source_name: MOM
+    authority_tier: 1
+    category: employment
+    source_url: https://www.mom.gov.sg/employment-practices/salary/paying-salary
+  - source_name: MOM
+    authority_tier: 1
+    category: employment
+    source_url: https://www.mom.gov.sg/employment-practices/salary/salary-deductions
+  - source_name: MOM
+    authority_tier: 1
+    category: employment
+    source_url: https://www.mom.gov.sg/employment-practices/salary/itemised-payslips
+  - source_name: MOM
+    authority_tier: 1
+    category: employment
+    source_url: https://www.mom.gov.sg/employment-practices/hours-of-work-overtime-and-rest-days
+  - source_name: MOM
+    authority_tier: 1
+    category: employment
+    source_url: https://www.mom.gov.sg/employment-practices/contract-of-service/key-employment-terms
+  - source_name: MOM
+    authority_tier: 1
+    category: employment
+    source_url: https://www.mom.gov.sg/employment-practices/employment-act/who-is-covered
