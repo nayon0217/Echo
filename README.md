@@ -2,7 +2,7 @@
 
 Voice-first AI verification bot for migrant workers in Singapore. See [`specs.md`](./specs.md) for the full project vision.
 
-**Current step:** a user messages the bot (e.g. "Hi Echo!") and gets back an interactive menu to pick one of four languages (English, Bengali, Tamil, Mandarin).
+**Current step:** a user messages the bot (e.g. "Hi Echo!") and gets back an interactive menu to pick one of five languages (English, Bengali, Tamil, Mandarin, Indonesian).
 
 ## Stack
 
