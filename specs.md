@@ -78,7 +78,7 @@ Buildable by a technical team within hackathon scope.
 
 | Layer | Choice |
 |---|---|
-| **Messaging** | WhatsApp Cloud API (Meta-hosted). Telegram as fallback if WhatsApp provisioning stalls |
+| **Messaging** | WhatsApp Cloud API (Meta-hosted). Telegram bot as fallback if WhatsApp provisioning stalls |
 | **Speech-to-text** | Open-source multilingual ASR (Whisper) |
 | **Reasoning** | Lightweight LLM layer, retrieval-grounded — never freelances an answer |
 | **Fact base** | Official sources only: MOM advisories, Singapore Police Force Scam Alert bulletins, TWC2 and Migrant Workers' Centre scam reports |
