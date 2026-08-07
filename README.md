@@ -2,7 +2,9 @@
 
 Voice-first AI verification bot for migrant workers in Singapore. See [`specs.md`](./specs.md) for the full project vision.
 
-**Current step:** a user messages the bot (e.g. "Hi Echo!") and gets back an interactive menu to pick one of five languages (English, Bengali, Tamil, Mandarin, Indonesian).
+**Current step:** a worker forwards a text message, a voice note, or an image in any
+language; the bot reads it, detects the language, and replies in the language they
+picked from the menu. Verification of the claim itself is not built yet.
 
 ## Stack
 
@@ -67,6 +69,124 @@ Current corpus: **38 tier-1 MOM documents, ~293 chunks** (Work Permit rules, lev
 salary, housing, medical, sector requirements). Tier-1 SPF ScamAlert is deferred
 until the scam path is built (see the note in `sources.yaml`).
 
+## Message routing
+
+Every inbound message is classified by [`src/media.js`](./src/media.js) and dispatched
+to a handler in [`src/handlers.js`](./src/handlers.js):
+
+| WhatsApp type | Kind | What happens |
+|---|---|---|
+| `text` | text | Runs the translate pipeline below |
+| `image` | image | Stub — replies "can't check images yet" |
+| `audio` | voice | Downloads, transcribes with Whisper, replies in the worker's chosen language. `audio.voice` distinguishes an in-app recording from an uploaded file |
+| `interactive`, `button` | control | Language selection |
+| everything else | unsupported | Logged and ignored, no reply |
+
+All three content kinds converge on `processText()`, which is where the verification
+stages (policy.md §1 stages 3–10) will live — so voice and image inherit them once
+transcription and image parsing land.
+
+**First contact is gated behind the language menu.** Until a sender picks a reply
+language, any content message gets the menu instead — but the message is held in
+`session.pending` and processed as soon as they choose, so nothing has to be sent
+twice. Ignored media never triggers the menu.
+
+The reply language is asked for rather than inferred on purpose. A forwarded scam is
+often written in English regardless of what the worker actually reads, so answering in
+the *detected* language would reply in English to someone who can't read it. Detected
+language and reply language are separate: the first is what we translate from, the
+second is what we answer in.
+
+## Verification pipeline (Python)
+
+`pipeline/translate.py` implements stage 2 of [`policy.md`](./policy.md) §1: detect the
+message's language and translate it to English, the pivot language the corpus is
+indexed in. Output is schema-enforced via structured outputs — never parsed out of
+free text. `app/webhook.py` exposes it over HTTP so the Node layer can call it.
+
+```bash
+source .venv/bin/activate
+uvicorn app.webhook:app --reload --port 8000
+```
+
+The port must match `PIPELINE_URL` in `.env`. Bind to localhost only — this process
+holds the Claude API key.
+
+Try it without the bot:
+
+```bash
+python -m pipeline.translate "এটা কি সত্যি?"        # prints the parsed JSON
+curl localhost:8000/health
+curl -X POST localhost:8000/translate \
+  -H "Content-Type: application/json" -d '{"text":"இது உண்மையா?"}'
+```
+
+The model is set by `CLAUDE_MODEL` in `.env` (currently `claude-sonnet-5`) and the key
+by `CLAUDE_API_KEY`.
+
+### Voice notes
+
+[`pipeline/asr.py`](./pipeline/asr.py) is stage 1: faster-whisper transcribes the note
+in its original language, then `translate_transcript()` renders it both into English
+(the retrieval pivot) and into the language the worker picked — one API call for both.
+
+Between those two steps sits **abstention gate 1** (policy.md §7): Whisper's
+token-weighted mean log-probability. Below `MIN_MEAN_LOGPROB`, the transcript is
+returned untranslated and the bot asks for a re-record rather than pushing a
+mis-heard claim into verification. This is the only genuine model-confidence signal in
+the pipeline — Claude does not expose logprobs.
+
+```bash
+python -m pipeline.asr voice.ogg                      # transcript + confidence
+curl -X POST localhost:8000/transcribe \
+  -F "file=@voice.ogg" -F "target_language=bn"        # transcribe + translate
+```
+
+`WHISPER_MODEL` defaults to `large-v3` per policy.md §2 — the first run downloads
+~3 GB. Set `WHISPER_MODEL=base` (~145 MB) while iterating; accuracy on non-English
+audio drops sharply, so tune gate thresholds against the model you'll actually ship.
+`WHISPER_DEVICE` and `WHISPER_COMPUTE_TYPE` default to `cpu` / `int8`.
+
+WhatsApp voice notes are OGG/Opus, decoded via PyAV — no ffmpeg binary needed.
+
+### Images
+
+[`pipeline/vision.py`](./pipeline/vision.py) is stage 1 for images: Claude reads the
+text out of a screenshot, a photo of a letter, or a poster. It then goes through the
+same `translate_transcript()` call the voice path uses, so an image and a voice note
+converge after their first stage.
+
+There is no separate OCR engine on purpose. These images are photographed at an angle,
+in bad light, half-cropped, and often mix scripts; reading them well needs the layout
+and the surrounding context together, which a bare OCR pass throws away.
+
+```bash
+python -m pipeline.vision screenshot.png              # extracted text + confidence
+curl -X POST localhost:8000/extract \
+  -F "file=@job-ad.jpg" -F "target_language=ta"       # read + translate
+```
+
+**The image gate is weaker than the voice one, and it is worth knowing why.** Gate 1
+uses Whisper's own log-probability — a real model-confidence signal. Vision models
+expose no equivalent through the API, so `Extraction.confidence` is Claude's
+*self-report*: it is asked how well it could read the image and it answers. That
+catches genuinely unreadable images well and does not catch a confidently misread
+digit. Below `MIN_CONFIDENCE` (0.6) the image comes back untranslated and the bot asks
+for a sharper photo.
+
+Measured on a rendered notice put through increasing Gaussian blur: radius 3 → 0.97
+confidence and a correct read; radius 5 → 0.75, still correct; radius 8 → 0.40, and the
+model misread `$800` as `$600`. The gate rejected exactly the case that was wrong.
+That is one data point on one image, not a calibration — like the ASR threshold, this
+one gets tuned on the golden set in phase 4 (policy.md §7).
+
+If the picture can't be read but the worker typed a caption with it, the caption is
+used instead: those are their own words, carry no OCR risk, and are usually where the
+actual question is.
+
+Not built yet: AI-generation detection (specs.md §5). A forged "MOM letter" that reads
+cleanly is transcribed and translated without comment.
+
 ## Setup
 
 1. Install dependencies:
@@ -110,11 +230,63 @@ Then in the **Meta App Dashboard → WhatsApp → Configuration → Webhook**:
 From one of your registered test numbers, send any message (e.g. "Hi Echo!") to the bot number.
 You should receive the "Choose language" list. Tapping a language sends back a confirmation.
 
+### Automated tests
+
+The suite exists so the text and voice features can be verified **without** access to
+the Meta webhook. Everything except the two calls to Meta's servers is covered.
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+
+pytest                # unit: no network, no model weights, ~0.5s
+npm test              # Node: routing + handlers, fetch stubbed in-process, ~0.1s
+pytest --live         # real Claude API + real Whisper, ~2 min, costs tokens
+```
+
+`pytest` and `npm test` are free and fast — run them on every change. `pytest --live`
+is the acceptance check: it answers "does translation actually work", using real API
+calls and real audio.
+
+Voice fixtures are synthesised at run time with macOS `say` and transcoded to
+OGG/Opus with PyAV — the same container WhatsApp sends. No ffmpeg, no committed audio.
+They are cached in `tests/fixtures/audio/` (gitignored), so only the first run pays for
+synthesis. Image fixtures are rendered with Pillow and can be degraded on demand (blur,
+downscale, rotate) to exercise the extraction gate — a synthetic image is the point,
+since we know exactly what text is in it.
+
+**Live runs default to `WHISPER_MODEL=base`**, which is the model cached locally; the
+policy.md default (`large-v3`) is a ~3 GB download. `base` mis-hears numbers in
+non-English audio, so the tests that assert number fidelity there skip unless you run
+against large-v3:
+
+```bash
+WHISPER_MODEL=large-v3 pytest --live
+```
+
+What each file covers:
+
+- `tests/test_asr_unit.py` — abstention gate 1 (policy.md §7) as pure logic
+- `tests/test_translate_unit.py` — input validation, the `<message>` envelope, schema enforcement
+- `tests/test_webhook_unit.py` — status-code mapping, the gate-1 short circuit, temp-file cleanup
+- `tests/test_vision_unit.py` — the image gate, media-type and size validation, prompt shape
+- `tests/test_translate_live.py` — real translation: 4 languages, detail preservation, prompt injection
+- `tests/test_voice_live.py` — real audio → Whisper → Claude, through the FastAPI route
+- `tests/test_vision_live.py` — real images → Claude vision → Claude, through the FastAPI route
+- `tests/media.test.js` — inbound message classification against real Meta payload shapes
+- `tests/handlers.test.js` — handlers + pipeline client + media download, with `fetch` stubbed
+
 ## Files
 
-- `src/index.js` — Express server + webhook (verify + receive)
+- `src/index.js` — Express server + webhook (verify + receive), per-sender state, dispatch
+- `src/media.js` — classifies an inbound message: text / image / voice / control / unsupported
+- `src/handlers.js` — one handler per kind: text, voice, image, ignored
 - `src/whatsapp.js` — WhatsApp Cloud API send helpers
+- `src/pipeline.js` — HTTP client for the Python pipeline
 - `src/languages.js` — the four language options
+- `pipeline/asr.py` — faster-whisper speech to text + confidence (policy.md §1 stage 1)
+- `pipeline/vision.py` — read text out of an image + confidence (stage 1, image path)
+- `pipeline/translate.py` — detect language + translate (policy.md §1 stage 2)
+- `app/webhook.py` — FastAPI service exposing the pipeline on port 8000
 - `db/schema.sql` — Postgres corpus schema (documents + chunks)
 - `db/connection.py` — psycopg connection helpers (config from `.env`)
 - `db/init_db.py` — apply / inspect the schema (`python -m db.init_db`)
@@ -122,3 +294,4 @@ You should receive the "Choose language" list. Tapping a language sends back a c
 - `ingest/sources.yaml` — curated official-source list with authority tiers
 - `ingest/fetch.py` — fetch → chunk → upsert into Postgres
 - `ingest/chunker.py` — heading-aware, list-safe chunking
+- `tests/` — see [Automated tests](#automated-tests); `conftest.py` synthesises voice fixtures

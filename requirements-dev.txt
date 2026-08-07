@@ -1,0 +1,6 @@
+# Test-only dependencies. Install alongside requirements.txt:
+#     pip install -r requirements.txt -r requirements-dev.txt
+
+pytest>=8.0,<9
+httpx>=0.27              # fastapi.testclient transport
+pillow>=10,<14           # renders the image fixtures in tests/conftest.py

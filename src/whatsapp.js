@@ -64,3 +64,50 @@ export function sendLanguageMenu(to) {
 export function sendText(to, body) {
   return send({ to, type: "text", text: { body } });
 }
+
+/**
+ * Download media (voice note, image) by its id.
+ *
+ * Inbound messages carry a media *id*, not the bytes, so this is two authenticated
+ * calls: resolve the id to a short-lived URL, then fetch that URL. The second call
+ * needs the bearer token too — Meta's media CDN returns 401 without it, which is the
+ * usual reason this appears to "just not work".
+ *
+ * @returns {Promise<{buffer: Buffer, mimeType: string}|null>} null on any failure
+ */
+export async function downloadMedia(mediaId) {
+  if (!mediaId) return null;
+
+  try {
+    const metaRes = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!metaRes.ok) {
+      console.error(`[whatsapp] media lookup failed: ${metaRes.status}`);
+      return null;
+    }
+
+    const { url, mime_type: mimeType } = await metaRes.json();
+    if (!url) {
+      console.error("[whatsapp] media lookup returned no url");
+      return null;
+    }
+
+    const fileRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!fileRes.ok) {
+      console.error(`[whatsapp] media download failed: ${fileRes.status}`);
+      return null;
+    }
+
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
+    console.log(`[whatsapp] downloaded ${buffer.length} bytes (${mimeType})`);
+    return { buffer, mimeType: mimeType || "application/octet-stream" };
+  } catch (err) {
+    console.error(`[whatsapp] media download error: ${err.name}`);
+    return null;
+  }
+}
