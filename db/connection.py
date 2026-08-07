@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 import psycopg
@@ -23,7 +24,7 @@ from psycopg.rows import dict_row
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 except ModuleNotFoundError:  # dotenv is optional at runtime
     pass
 

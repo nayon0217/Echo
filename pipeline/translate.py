@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """Stage 2 of the ECHO pipeline: detect the language and translate to English.
 
 policy.md §1 lists translation as stage [2]. English is the pivot language — the
@@ -14,10 +15,19 @@ Never regex an LLM response").
 
 Privacy (policy.md §11): this module never logs message content. Callers must not
 either — production stores verdicts and timings, never transcripts.
+=======
+"""Stage 2 — translate to English (policy.md §1).
+
+English is the pivot language for retrieval: the corpus is English, so every
+inbound message is translated before routing/claim extraction. We also capture
+the detected source language so the compose stage can later reply in the worker's
+mother tongue.
+>>>>>>> 2d5c287 (LLM layer added)
 """
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 import os
 from functools import lru_cache
 
@@ -276,3 +286,57 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+=======
+from dataclasses import dataclass
+
+from .llm import structured_call
+
+_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source_language": {
+            "type": "string",
+            "description": "BCP-47 / ISO 639-1 code of the input language, e.g. en, bn, ta, zh, id, ms, my, ta.",
+        },
+        "was_translated": {
+            "type": "boolean",
+            "description": "True if the input was not already English and had to be translated.",
+        },
+        "text_en": {
+            "type": "string",
+            "description": "The message in fluent English. If already English, return it unchanged.",
+        },
+    },
+    "required": ["source_language", "was_translated", "text_en"],
+}
+
+_SYSTEM = (
+    "You are a translator for a Singapore migrant-worker information service. "
+    "Translate the user's message into clear, faithful English for a fact-checking pipeline. "
+    "Preserve every factual detail: figures, dates, agency names, fees, and any instructions. "
+    "Do not summarise, answer, or add commentary. If the text is already English, return it unchanged."
+)
+
+
+@dataclass
+class Translation:
+    source_language: str
+    was_translated: bool
+    text_en: str
+
+
+def translate_to_english(text: str) -> Translation:
+    result = structured_call(
+        system=_SYSTEM,
+        user=text,
+        schema=_SCHEMA,
+        tool_name="record_translation",
+        tool_description="Record the detected source language and the English translation.",
+        max_tokens=1500,
+    )
+    return Translation(
+        source_language=result.get("source_language", "und"),
+        was_translated=bool(result.get("was_translated", False)),
+        text_en=result.get("text_en", text).strip() or text,
+    )
+>>>>>>> 2d5c287 (LLM layer added)

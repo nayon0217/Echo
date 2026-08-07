@@ -2,9 +2,13 @@ import "dotenv/config";
 import express from "express";
 import { sendLanguageMenu, sendText } from "./whatsapp.js";
 import { LANGUAGE_BY_ID } from "./languages.js";
+<<<<<<< HEAD
 import { isHealthy, PIPELINE_URL } from "./pipeline.js";
 import { KIND, classify } from "./media.js";
 import { handleText, handleImage, handleVoice, handleUnsupported } from "./handlers.js";
+=======
+import { processMessage, formatReply } from "./pipeline.js";
+>>>>>>> 2d5c287 (LLM layer added)
 
 const app = express();
 app.use(express.json());
@@ -12,6 +16,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "echo_verify_token";
 
+<<<<<<< HEAD
 // Per-sender state, keyed by phone number: the language they picked and the last
 // message we saw from them. In memory on purpose — policy.md §11 commits to no
 // personal data retention, so this dies with the process and is never written to
@@ -44,6 +49,12 @@ function sessionFor(from) {
   }
   return s;
 }
+=======
+// Minimal in-memory session state: which language each user chose.
+// Once a user has picked a language, their next text messages are treated as
+// claims to check. (For a hackathon this is fine; swap for Redis if it grows.)
+const userLanguage = new Map();
+>>>>>>> 2d5c287 (LLM layer added)
 
 app.get("/", (_req, res) => res.send("ECHO WhatsApp bot is running."));
 
@@ -67,6 +78,7 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+<<<<<<< HEAD
     const messages = value?.messages;
     if (!Array.isArray(messages) || messages.length === 0) {
       return; // status callback (delivered/read), not a user message
@@ -85,11 +97,48 @@ app.post("/webhook", async (req, res) => {
       }
       await handleMessage(message);
     }
+=======
+    const message = value?.messages?.[0];
+    if (!message) return; // status callback (delivered/read), not a user message
+
+    const from = message.from;
+
+    // User tapped a language in the list menu.
+    if (message.type === "interactive") {
+      const reply = message.interactive?.list_reply;
+      const chosen = reply && LANGUAGE_BY_ID[reply.id];
+      if (chosen) {
+        userLanguage.set(from, chosen);
+        console.log(`[webhook] ${from} chose ${chosen.title}`);
+        await sendText(
+          from,
+          `Great — I'll reply in ${chosen.title}. Send me a voice note, image, or message to check.`,
+        );
+        return;
+      }
+    }
+
+    // A text message from a user who has already chosen a language is a claim
+    // to check: run it through the verification pipeline and reply.
+    if (message.type === "text" && userLanguage.has(from)) {
+      const lang = userLanguage.get(from);
+      const text = message.text?.body?.trim();
+      if (text) {
+        await handleClaim(from, text, lang);
+        return;
+      }
+    }
+
+    // First contact (or a non-text before language setup) opens the language menu.
+    console.log(`[webhook] message from ${from} (${message.type}) -> sending language menu`);
+    await sendLanguageMenu(from);
+>>>>>>> 2d5c287 (LLM layer added)
   } catch (err) {
     console.error("[webhook] handler error:", err);
   }
 });
 
+<<<<<<< HEAD
 /** Classify one message and dispatch it to the handler for its kind. */
 async function handleMessage(message) {
   const from = message.from;
@@ -179,6 +228,25 @@ function dispatch(c, session) {
 }
 
 app.listen(PORT, async () => {
+=======
+// Runs a forwarded message through the pipeline and sends the claims back.
+async function handleClaim(from, text, lang) {
+  await sendText(from, "🔎 Checking your message…");
+  try {
+    const result = await processMessage(text, lang?.code);
+    console.log(`[pipeline] ${from}: ${result?.claims?.length ?? 0} claim(s)`);
+    await sendText(from, formatReply(result));
+  } catch (err) {
+    console.error("[pipeline] error:", err);
+    await sendText(
+      from,
+      "Sorry, I couldn't check that right now. Please try again shortly, or call the MOM hotline 6438 5122.",
+    );
+  }
+}
+
+app.listen(PORT, () => {
+>>>>>>> 2d5c287 (LLM layer added)
   console.log(`ECHO bot listening on http://localhost:${PORT}`);
   if (await isHealthy()) {
     console.log(`[pipeline] connected at ${PIPELINE_URL}`);

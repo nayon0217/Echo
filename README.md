@@ -69,6 +69,7 @@ Current corpus: **38 tier-1 MOM documents, ~293 chunks** (Work Permit rules, lev
 salary, housing, medical, sector requirements). Tier-1 SPF ScamAlert is deferred
 until the scam path is built (see the note in `sources.yaml`).
 
+<<<<<<< HEAD
 ## Message routing
 
 Every inbound message is classified by [`src/media.js`](./src/media.js) and dispatched
@@ -186,6 +187,53 @@ actual question is.
 
 Not built yet: AI-generation detection (specs.md §5). A forged "MOM letter" that reads
 cleanly is transcribed and translated without comment.
+=======
+## Verification pipeline (LLM)
+
+Claude-backed, text stages built so far (`policy.md` §1). Every LLM call uses
+schema-enforced structured output (forced tool-use, `temperature=0`) — no
+free-text parsing.
+
+| Stage | Module | What it does |
+|---|---|---|
+| 2 translate | `pipeline/translate.py` | detect language, translate to English (retrieval pivot) |
+| 3 route | `pipeline/router.py` | multi-label: policy claim? scam signals? unintelligible? |
+| 4 claims | `pipeline/claims.py` | extract atomic, self-contained, checkable claims |
+| 5 queries | `pipeline/retrieve.py` | 3–5 official-terminology FTS queries per claim |
+| 6 retrieve | `pipeline/retrieve.py` | run queries over Postgres FTS + trigram, dedupe, rerank tier-1 first, attach the matching source document(s) to each claim |
+| 7–9 verify | `pipeline/verify.py` | Pass A verdict → Pass B per-citation audit → abstention gates → `supported`/`refuted`/`insufficient` |
+| (scam stub) | `pipeline/scam.py` | real warning message; merged in when router flags a scam |
+
+Each claim comes back with a **verdict**, `reasoning`, and `cited_sources` (only
+the citations that survived the audit + gates). The design optimises for
+*precision on confident verdicts*: it returns `insufficient` (and points to the
+MOM hotline) rather than risk a confident-wrong answer — e.g. a fabricated
+"\$300 renewal fee" is marked `insufficient`, not refuted from absence.
+
+Abstention gates (`policy.md` §7): top retrieval score below floor, audit
+stripped all citations, all citations tier-3, or a cited doc is future-dated /
+superseded. Tune the floor with `RETRIEVAL_SCORE_FLOOR` in `.env`.
+
+Test the pieces alone:
+
+```bash
+python -m pipeline.retrieve "MOM raised the work permit levy to \$900 in 2026"
+python -m pipeline.verify   "Employers must pay a monthly levy for each Work Permit holder"
+```
+
+Set `CLAUDE_API_KEY` and `CLAUDE_MODEL` in `.env`. Then, given a forwarded
+message, return the extracted claims (each with generated search queries):
+
+```bash
+python -m pipeline.pipeline "MOM raised the work permit levy to \$900 in 2026"
+echo "levy naik jadi 900 dollar tahun 2026" | python -m pipeline.pipeline
+```
+
+Routing behaviour: a message can be a policy claim, a scam, both, or neither.
+Scam messages get a warning; messages with no checkable claim get the MOM hotline
+template. Audio transcription (stage 1) and retrieval/verification (stages 6–10)
+are not wired yet — the pipeline currently stops after claim extraction.
+>>>>>>> 2d5c287 (LLM layer added)
 
 ## Setup
 
@@ -210,6 +258,34 @@ cleanly is transcribed and translated without comment.
    # or, auto-reload on file changes:
    npm run dev
    ```
+
+## Run the bot + pipeline together
+
+The WhatsApp bot (Node) and the verification pipeline (Python) run as two
+processes. The bot POSTs each forwarded message to the pipeline service and
+replies with the extracted claims.
+
+```bash
+# 1. Postgres (corpus)
+docker compose up -d db
+
+# 2. Pipeline service (Python) — the bot calls this
+source .venv/bin/activate
+uvicorn app.api:app --host 127.0.0.1 --port 8000
+
+# 3. WhatsApp bot (Node), in another terminal
+npm start
+```
+
+Flow: a user messages the bot → picks a language → any text they then send is
+run through the pipeline (translate → route → claims) and the extracted claims
+are sent back. Scam-looking messages get a warning; messages with no checkable
+claim get the MOM hotline template. The bot talks to the pipeline at
+`PIPELINE_URL` (default `http://127.0.0.1:8000`).
+
+> Note: outbound replies require a valid WhatsApp `access_token` in `.env`.
+> A `401 Authentication Error` in the logs means the token has expired — refresh
+> it in the Meta dashboard.
 
 ## Connect the webhook to Meta
 
@@ -277,6 +353,7 @@ What each file covers:
 
 ## Files
 
+<<<<<<< HEAD
 - `src/index.js` — Express server + webhook (verify + receive), per-sender state, dispatch
 - `src/media.js` — classifies an inbound message: text / image / voice / control / unsupported
 - `src/handlers.js` — one handler per kind: text, voice, image, ignored
@@ -287,6 +364,13 @@ What each file covers:
 - `pipeline/vision.py` — read text out of an image + confidence (stage 1, image path)
 - `pipeline/translate.py` — detect language + translate (policy.md §1 stage 2)
 - `app/webhook.py` — FastAPI service exposing the pipeline on port 8000
+=======
+- `src/index.js` — Express server + webhook (verify + receive + route to pipeline)
+- `src/whatsapp.js` — WhatsApp Cloud API send helpers
+- `src/pipeline.js` — calls the Python pipeline service, formats the claims reply
+- `src/languages.js` — the four language options
+- `app/api.py` — FastAPI pipeline service (`POST /process`)
+>>>>>>> 2d5c287 (LLM layer added)
 - `db/schema.sql` — Postgres corpus schema (documents + chunks)
 - `db/connection.py` — psycopg connection helpers (config from `.env`)
 - `db/init_db.py` — apply / inspect the schema (`python -m db.init_db`)
@@ -294,4 +378,10 @@ What each file covers:
 - `ingest/sources.yaml` — curated official-source list with authority tiers
 - `ingest/fetch.py` — fetch → chunk → upsert into Postgres
 - `ingest/chunker.py` — heading-aware, list-safe chunking
+<<<<<<< HEAD
 - `tests/` — see [Automated tests](#automated-tests); `conftest.py` synthesises voice fixtures
+=======
+- `pipeline/llm.py` — Claude client, schema-enforced structured output
+- `pipeline/translate.py` · `router.py` · `claims.py` · `retrieve.py` · `verify.py` · `scam.py` — stages 2–9 + scam stub
+- `pipeline/pipeline.py` — orchestrator + CLI (message → extracted claims)
+>>>>>>> 2d5c287 (LLM layer added)
