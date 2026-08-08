@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from app import webhook as W
 from pipeline.asr import Transcript
 from pipeline.translate import Translation, VoiceTranslation
+from pipeline.contract import ContractAnswer, ContractRead
 from pipeline.vision import Extraction
 
 
@@ -543,3 +544,245 @@ def test_extract_does_not_echo_content_on_failure(client, monkeypatch):
         "/extract", files=image_upload(name="passport-A1234567.jpg"), data={"target_language": "en"}
     )
     assert "A1234567" not in res.text
+
+
+# --------------------------------------------------------------------------------
+# /contract — reading an employment contract
+# --------------------------------------------------------------------------------
+
+CONTRACT_TEXT = "1. Basic salary: SGD 800 per month.\n2. Notice period: one month."
+
+
+def contract_read(**overrides) -> ContractRead:
+    base = dict(
+        is_contract=True, text=CONTRACT_TEXT, language_code="en", confidence=0.94
+    )
+    return ContractRead(**{**base, **overrides})
+
+
+def pdf_upload(name="contract.pdf", data=b"%PDF-1.4 fake", content_type="application/pdf"):
+    return {"file": (name, io.BytesIO(data), content_type)}
+
+
+def test_contract_read_returns_the_text_to_hold(client, monkeypatch):
+    """The service stores nothing — the caller holds the text (policy.md §11)."""
+    monkeypatch.setattr(W.contract, "read_contract", lambda d, mt: contract_read())
+
+    res = client.post("/contract", files=pdf_upload())
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_contract"] is True
+    assert body["is_usable"] is True
+    assert body["text"] == CONTRACT_TEXT
+    assert body["confidence"] == 0.94
+
+
+def test_an_unusable_contract_withholds_the_text(client, monkeypatch):
+    """Don't hand back a bad read the caller might then answer questions against.
+
+    This is the gate: a contract we couldn't read properly must not become a document
+    we quote salary figures from.
+    """
+    monkeypatch.setattr(
+        W.contract, "read_contract", lambda d, mt: contract_read(confidence=0.3, text="SGD 8[unclear]0")
+    )
+
+    body = client.post("/contract", files=pdf_upload()).json()
+
+    assert body["is_usable"] is False
+    assert body["text"] == "", "an unusable read must not leak its text to the caller"
+    assert body["is_contract"] is True, "it is a contract; we just couldn't read it"
+
+
+def test_a_non_contract_is_reported_as_such(client, monkeypatch):
+    """A scam poster and an unreadable contract need different replies."""
+    monkeypatch.setattr(
+        W.contract,
+        "read_contract",
+        lambda d, mt: contract_read(is_contract=False, text="", confidence=0.99),
+    )
+
+    body = client.post("/contract", files=pdf_upload()).json()
+    assert body["is_contract"] is False
+    assert body["is_usable"] is False
+    assert body["text"] == ""
+
+
+def test_contract_forwards_bytes_and_media_type(client, monkeypatch):
+    seen = {}
+
+    def capture(data, media_type):
+        seen["data"], seen["media_type"] = data, media_type
+        return contract_read()
+
+    monkeypatch.setattr(W.contract, "read_contract", capture)
+    client.post("/contract", files=pdf_upload(data=b"exact-pdf-bytes"))
+
+    assert seen["data"] == b"exact-pdf-bytes"
+    assert seen["media_type"] == "application/pdf"
+
+
+def test_a_photographed_contract_page_is_accepted(client, monkeypatch):
+    seen = {}
+
+    def capture(data, media_type):
+        seen["media_type"] = media_type
+        return contract_read()
+
+    monkeypatch.setattr(W.contract, "read_contract", capture)
+    res = client.post(
+        "/contract", files=pdf_upload(name="page1.jpg", content_type="image/jpeg")
+    )
+    assert res.status_code == 200
+    assert seen["media_type"] == "image/jpeg"
+
+
+def test_contract_rejects_an_empty_upload(client, monkeypatch):
+    def must_not_run(data, media_type):
+        raise AssertionError("called the API with an empty document")
+
+    monkeypatch.setattr(W.contract, "read_contract", must_not_run)
+    assert client.post("/contract", files=pdf_upload(data=b"")).status_code == 400
+
+
+def test_bad_contract_input_is_400(client, monkeypatch):
+    def boom(data, media_type):
+        raise ValueError("unsupported document type 'text/plain'")
+
+    monkeypatch.setattr(W.contract, "read_contract", boom)
+    assert client.post("/contract", files=pdf_upload()).status_code == 400
+
+
+@pytest.mark.parametrize("exc", [api_status_error, api_connection_error])
+def test_contract_upstream_failure_is_502(client, monkeypatch, exc):
+    def boom(data, media_type):
+        raise exc()
+
+    monkeypatch.setattr(W.contract, "read_contract", boom)
+    assert client.post("/contract", files=pdf_upload()).status_code == 502
+
+
+# --------------------------------------------------------------------------------
+# /contract/ask — grounded question answering
+# --------------------------------------------------------------------------------
+
+
+def contract_answer(**overrides) -> ContractAnswer:
+    base = dict(
+        answerable=True,
+        answer_en="Your basic salary is SGD 800 per month.",
+        answer_target="உங்கள் அடிப்படை சம்பளம் மாதம் SGD 800.",
+        quote="Basic salary: SGD 800 per month.",
+        needs_legal_check=False,
+    )
+    return ContractAnswer(**{**base, **overrides})
+
+
+def ask(client, **overrides):
+    body = {
+        "contract_text": CONTRACT_TEXT,
+        "question": "how much do I earn?",
+        "target_language": "ta",
+    }
+    return client.post("/contract/ask", json={**body, **overrides})
+
+
+def test_ask_returns_a_grounded_answer(client, monkeypatch):
+    monkeypatch.setattr(W.contract, "answer_question", lambda t, q, lang: contract_answer())
+
+    res = ask(client)
+    assert res.status_code == 200
+
+    body = res.json()
+    assert body["answerable"] is True
+    assert "800" in body["answer_en"]
+    assert body["quote"] == "Basic salary: SGD 800 per month."
+    assert body["needs_legal_check"] is False
+
+
+def test_ask_forwards_all_three_inputs(client, monkeypatch):
+    seen = {}
+
+    def capture(text, question, lang):
+        seen.update(text=text, question=question, lang=lang)
+        return contract_answer()
+
+    monkeypatch.setattr(W.contract, "answer_question", capture)
+    ask(client, question="can they deduct my food?", target_language="bn")
+
+    assert seen["text"] == CONTRACT_TEXT
+    assert seen["question"] == "can they deduct my food?"
+    assert seen["lang"] == "bn"
+
+
+def test_an_unanswerable_question_says_so(client, monkeypatch):
+    """The property that matters most: silence in the contract is reported, not filled."""
+    monkeypatch.setattr(
+        W.contract,
+        "answer_question",
+        lambda t, q, lang: contract_answer(
+            answerable=False,
+            answer_en="Your contract does not mention overtime pay.",
+            quote="",
+        ),
+    )
+
+    body = ask(client, question="what is my overtime rate?").json()
+    assert body["answerable"] is False
+    assert body["quote"] == ""
+    assert "does not" in body["answer_en"]
+
+
+def test_a_legality_question_is_flagged_not_answered(client, monkeypatch):
+    """We were given the contract, not the law — the flag is how the caller says so."""
+    monkeypatch.setattr(
+        W.contract,
+        "answer_question",
+        lambda t, q, lang: contract_answer(needs_legal_check=True),
+    )
+    body = ask(client, question="is this deduction legal?").json()
+    assert body["needs_legal_check"] is True
+
+
+@pytest.mark.parametrize("target", ["fr", "xx", "EN", ""])
+def test_ask_rejects_an_unsupported_target_language(client, monkeypatch, target):
+    def must_not_run(text, question, lang):
+        raise AssertionError("called the API before validating the target language")
+
+    monkeypatch.setattr(W.contract, "answer_question", must_not_run)
+    assert ask(client, target_language=target).status_code == 400
+
+
+@pytest.mark.parametrize("field", ["contract_text", "question"])
+def test_ask_rejects_empty_fields(client, monkeypatch, field):
+    def boom(text, question, lang):
+        raise ValueError(f"{field} is empty")
+
+    monkeypatch.setattr(W.contract, "answer_question", boom)
+    assert ask(client, **{field: "   "}).status_code == 400
+
+
+def test_ask_missing_fields_is_422(client):
+    assert client.post("/contract/ask", json={"question": "hi"}).status_code == 422
+
+
+@pytest.mark.parametrize("exc", [api_status_error, api_connection_error])
+def test_ask_upstream_failure_is_502(client, monkeypatch, exc):
+    def boom(text, question, lang):
+        raise exc()
+
+    monkeypatch.setattr(W.contract, "answer_question", boom)
+    assert ask(client).status_code == 502
+
+
+def test_ask_does_not_echo_contract_content_on_failure(client, monkeypatch):
+    """policy.md §11 — a contract holds a passport number and a salary."""
+
+    def boom(text, question, lang):
+        raise api_status_error(429)
+
+    monkeypatch.setattr(W.contract, "answer_question", boom)
+    res = ask(client, contract_text="Passport A1234567, salary SGD 800")
+    assert "A1234567" not in res.text
+    assert "800" not in res.text

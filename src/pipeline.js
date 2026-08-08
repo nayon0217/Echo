@@ -260,6 +260,82 @@ export async function extractImage(buffer, mimeType, targetLanguage) {
   }
 }
 
+// Reading a multi-page contract at high effort is the slowest call in the pipeline.
+const CONTRACT_TIMEOUT_MS = Number(process.env.PIPELINE_CONTRACT_TIMEOUT_MS) || 180000;
+
+const DOC_EXT_BY_MIME = {
+  "application/pdf": ".pdf",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+};
+
+/**
+ * Transcribe an employment contract so we can hold it and answer questions about it.
+ *
+ * The extracted text comes back rather than being stored server-side: the pipeline is
+ * stateless, and the contract lives only in this process's memory (policy.md §11).
+ *
+ * @param {Buffer} buffer   the document bytes
+ * @param {string} mimeType "application/pdf", or an image type for a photographed page
+ * @returns {Promise<object|null>} the pipeline response, or null on failure
+ */
+export async function readContract(buffer, mimeType) {
+  try {
+    const type = (mimeType || "").split(";")[0].trim() || "application/pdf";
+    const form = new FormData();
+    form.append("file", new Blob([buffer], { type }), `contract${DOC_EXT_BY_MIME[type] || ".pdf"}`);
+
+    const res = await fetch(`${PIPELINE_URL}/contract`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(CONTRACT_TIMEOUT_MS),
+    });
+
+    if (!res.ok) {
+      console.error(`[pipeline] /contract failed: ${res.status}`);
+      return null;
+    }
+    return await res.json();
+  } catch (err) {
+    console.error(`[pipeline] /contract unreachable: ${err.name}`);
+    return null;
+  }
+}
+
+/**
+ * Answer one question about a contract we're already holding.
+ *
+ * @param {string} contractText  text from a prior readContract() call
+ * @param {string} question      the worker's question
+ * @param {string} targetLanguage ISO 639-1 reply language
+ * @returns {Promise<object|null>} the pipeline response, or null on failure
+ */
+export async function askContract(contractText, question, targetLanguage) {
+  try {
+    const res = await fetch(`${PIPELINE_URL}/contract/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contract_text: contractText,
+        question,
+        target_language: targetLanguage,
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+
+    if (!res.ok) {
+      // Don't log the body — it echoes contract content (policy.md §11).
+      console.error(`[pipeline] /contract/ask failed: ${res.status}`);
+      return null;
+    }
+    return await res.json();
+  } catch (err) {
+    console.error(`[pipeline] /contract/ask unreachable: ${err.name}`);
+    return null;
+  }
+}
+
 /** True if the pipeline is up. Used at boot to warn early rather than at first message. */
 export async function isHealthy() {
   try {

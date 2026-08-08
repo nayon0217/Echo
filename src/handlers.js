@@ -7,7 +7,14 @@
  * claim extraction + DB retrieval + LLM true/false (policy.md §1 stages 3–9).
  */
 
-import { transcribe, extractImage, processMessage, formatReply } from "./pipeline.js";
+import {
+  transcribe,
+  extractImage,
+  processMessage,
+  formatReply,
+  readContract,
+  askContract,
+} from "./pipeline.js";
 import { downloadMedia } from "./whatsapp.js";
 import { HEARD_PREFIX, IMAGE_TEXT_PREFIX, uiString } from "./languages.js";
 
@@ -259,7 +266,120 @@ async function withCaptionFallback(c, session, failure) {
 }
 
 /**
- * Video, document, sticker, location, contacts, reaction, and anything else.
+ * A document — how an employment contract usually arrives (specs.md §2).
+ *
+ * Reads it once, then hands the text back for the caller to hold in the session. From
+ * that point the sender is in contract mode and their plain messages are answered
+ * against it (see handleContractQuestion) rather than run through verification.
+ *
+ * The contract never leaves memory: not written to disk, not sent to Postgres, gone
+ * when the process stops. That is what keeps policy.md §11 intact — this is the most
+ * sensitive document the bot will ever hold.
+ *
+ * @param {import("./media.js").Classification} c
+ * @param {{language: {code: string, title: string}|null}} session
+ * @returns {Promise<Result & {contract?: {text: string, filename: string}}>}
+ */
+export async function handleDocument(c, session) {
+  console.log(`[handler] document (${c.mimeType})${c.filename ? ` "${c.filename}"` : ""}`);
+
+  const media = await downloadMedia(c.mediaId);
+  if (!media) {
+    return {
+      reply: "I couldn't download that file. Could you send it again?",
+      translation: null,
+    };
+  }
+
+  const result = await readContract(media.buffer, media.mimeType || c.mimeType);
+  if (!result) {
+    return {
+      reply: "Sorry — I couldn't read that just now. Please try again in a moment.",
+      translation: null,
+    };
+  }
+
+  // Not an employment document at all. Say what we do handle rather than failing vaguely.
+  if (!result.is_contract) {
+    return {
+      reply:
+        "That doesn't look like an employment contract. I can read contracts, offer " +
+        "letters, IPAs, and work permit letters — send one of those and you can ask " +
+        "me questions about it.",
+      translation: null,
+    };
+  }
+
+  // It is a contract, but not read well enough to answer questions against. Refusing
+  // here matters more than elsewhere: a misread salary figure would be quoted back to
+  // someone who has no other way to check it.
+  if (!result.is_usable) {
+    console.log(`[handler] contract unusable (confidence ${result.confidence})`);
+    return {
+      reply:
+        "I can see this is a contract, but I couldn't read it clearly enough to answer " +
+        "questions about it safely. Could you send a sharper copy — the PDF if you " +
+        "have it, or photos taken straight on in good light?",
+      translation: null,
+    };
+  }
+
+  return {
+    reply:
+      "I've read your contract. Ask me anything about it — your salary, deductions, " +
+      "notice period, working hours.\n\n" +
+      "I'll only tell you what the contract itself says. Send \"done\" when you want " +
+      "to go back to checking messages.",
+    translation: null,
+    contract: { text: result.text, filename: c.filename || "" },
+  };
+}
+
+/**
+ * Answer a question against the contract held for this sender.
+ *
+ * Grounded strictly in the document. When the contract doesn't cover the question we
+ * say so rather than filling the gap — a plausible invention about someone's pay is
+ * worse than "your contract doesn't say", because they cannot check it.
+ *
+ * @param {string} question
+ * @param {{contract: {text: string}, language: {code: string}|null}} session
+ * @returns {Promise<Result>}
+ */
+export async function handleContractQuestion(question, session) {
+  const target = session?.language?.code || "en";
+
+  const result = await askContract(session.contract.text, question, target);
+  if (!result) {
+    return {
+      reply: "Sorry — I couldn't check your contract just now. Please try again in a moment.",
+      translation: null,
+    };
+  }
+
+  // Nothing about the answer's content is logged (policy.md §11).
+  console.log(`[handler] contract question answered (answerable=${result.answerable})`);
+
+  let reply = result.answer_target || result.answer_en;
+
+  // The quote is what makes the answer checkable — a worker can hold it against the
+  // page in front of them. Only useful when there is an actual answer.
+  if (result.answerable && result.quote) {
+    reply += `\n\nYour contract says:\n"${result.quote}"`;
+  }
+
+  // We were given the contract, not the law. Say so rather than implying we checked.
+  if (result.needs_legal_check) {
+    reply +=
+      "\n\nI can only tell you what your contract says — I can't tell you whether " +
+      "that's allowed under Singapore law. The MOM helpline is 1800 339 5505.";
+  }
+
+  return { reply, translation: result };
+}
+
+/**
+ * Video, sticker, location, contacts, reaction, and anything else.
  * Ignored by product decision — logged, never replied to.
  *
  * @param {import("./media.js").Classification} c

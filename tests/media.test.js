@@ -92,10 +92,43 @@ describe("control", () => {
   });
 });
 
+describe("document", () => {
+  test("classifies a PDF — how a contract usually arrives", () => {
+    const c = classify({
+      type: "document",
+      document: {
+        id: "DOC1",
+        mime_type: "application/pdf",
+        filename: "my employment contract.pdf",
+      },
+    });
+    assert.equal(c.kind, KIND.DOCUMENT);
+    assert.equal(c.mediaId, "DOC1");
+    assert.equal(c.mimeType, "application/pdf");
+    assert.equal(c.filename, "my employment contract.pdf");
+  });
+
+  test("filename and caption default to empty, not undefined", () => {
+    const c = classify({ type: "document", document: { id: "DOC2" } });
+    assert.equal(c.filename, "");
+    assert.equal(c.caption, "");
+  });
+
+  test("a non-PDF document still classifies — the pipeline decides what it accepts", () => {
+    // Rejecting by MIME here would mean a worker sending a .docx gets silence rather
+    // than an explanation.
+    const c = classify({
+      type: "document",
+      document: { id: "D3", mime_type: "application/msword", filename: "contract.doc" },
+    });
+    assert.equal(c.kind, KIND.DOCUMENT);
+    assert.equal(c.mimeType, "application/msword");
+  });
+});
+
 describe("ignored", () => {
   for (const type of [
     "video",
-    "document",
     "sticker",
     "location",
     "contacts",

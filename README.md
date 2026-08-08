@@ -2,9 +2,10 @@
 
 Voice-first AI verification bot for migrant workers in Singapore. See [`specs.md`](./specs.md) for the full project vision.
 
-**Current step:** a worker forwards a text message, a voice note, or an image in any
+**Current step:** a worker forwards a text message, voice note, or image in any
 language; the bot reads it, detects the language, and replies in the language they
-picked from the menu. Verification of the claim itself is not built yet.
+picked from the menu. They can also send their employment contract and ask questions
+about it. Verification of claims against official sources is not built yet.
 
 ## Stack
 
@@ -196,6 +197,55 @@ Not built yet: AI-generation detection (specs.md §5). A forged "MOM letter" tha
 cleanly is transcribed and verified without a synthetic-media flag.
 
 
+### Employment contracts
+
+[`pipeline/contract.py`](./pipeline/contract.py) implements specs.md §2 "Contract
+parsing": a worker sends their employment contract — as a PDF, or as photos of the
+pages — and then asks questions about it in their own language.
+
+Two calls, split deliberately. `read_contract()` runs once when the document arrives;
+`answer_question()` runs per question against the extracted text. That means the PDF is
+uploaded once and every follow-up costs one text-only call, which is what makes it a
+conversation rather than a one-shot.
+
+```bash
+python -m pipeline.contract contract.pdf
+python -m pipeline.contract contract.pdf --ask "how much can they deduct?" --language ta
+
+curl -X POST localhost:8000/contract -F "file=@contract.pdf"
+curl -X POST localhost:8000/contract/ask -H "Content-Type: application/json" \
+  -d '{"contract_text":"...","question":"what is my notice period?","target_language":"bn"}'
+```
+
+**The contract never touches disk.** The pipeline is stateless — it returns the text,
+and the Node layer holds it in the in-memory session for the life of the process. It is
+never written to disk or Postgres and dies with the process. That is what lets
+policy.md §11 ("no personal data retention") stand unamended: an employment contract
+carries the worker's name, passport number, employer, and salary, and is the most
+sensitive thing this bot handles. The cost is that a restart forgets it and the worker
+re-uploads.
+
+**Two boundaries the code enforces, both deliberate:**
+
+- **Answers are grounded in the document only.** Asked something the contract doesn't
+  cover, it returns `answerable: false` and says so rather than filling the gap. A
+  plausible invention about someone's pay is worse than "your contract doesn't say",
+  because they have no way to check it. Answerable questions come back with a verbatim
+  `quote` of the clause, so the answer can be held against the page.
+- **It will not say whether a term is legal.** That needs the MOM corpus and the
+  retrieval stages (policy.md §1 stages 6-8), which aren't built. Legality questions
+  set `needs_legal_check` and the bot points to the MOM helpline instead of guessing.
+  `specs.md`'s "what limits apply" is blocked on the corpus, not on this module.
+
+The read gate is stricter than the image gate — `MIN_CONFIDENCE` 0.7 vs 0.6 — because a
+misread salary figure gets quoted back as fact to someone who can't verify it.
+
+**Contract mode.** Uploading a contract puts that sender into contract mode: their typed
+messages become questions about the document rather than claims to verify. Forwarded
+voice notes and images still go through verification, so the worker can check a
+suspicious message without losing the contract. Sending `done` (or `exit`, `stop`,
+`back`, `cancel`) leaves the mode and forgets the document.
+
 ## Setup
 
 1. Install dependencies:
@@ -307,9 +357,12 @@ What each file covers:
 - `tests/test_translate_unit.py` — input validation, the `<message>` envelope, schema enforcement
 - `tests/test_webhook_unit.py` — status-code mapping, the gate-1 short circuit, temp-file cleanup
 - `tests/test_vision_unit.py` — the image gate, media-type and size validation, prompt shape
+- `tests/test_contract_unit.py` — the contract usability gate, PDF vs image blocks, prompt rules
+- `tests/routing.test.js` — boots the real Express app: onboarding, contract mode, dedupe
 - `tests/test_translate_live.py` — real translation: 4 languages, detail preservation, prompt injection
 - `tests/test_voice_live.py` — real audio → Whisper → Claude, through the FastAPI route
 - `tests/test_vision_live.py` — real images → Claude vision → Claude, through the FastAPI route
+- `tests/test_contract_live.py` — real multi-page PDF → Q&A; abstention and the legal boundary
 - `tests/media.test.js` — inbound message classification against real Meta payload shapes
 - `tests/handlers.test.js` — handlers + pipeline client + media download, with `fetch` stubbed
 
@@ -325,8 +378,9 @@ What each file covers:
 - `pipeline/vision.py` — read text out of an image + confidence (stage 1, image path)
 - `pipeline/llm.py` — Claude client, schema-enforced structured output
 - `pipeline/translate.py` · `router.py` · `claims.py` · `retrieve.py` · `verify.py` · `scam.py` — stages 2–9 + scam stub
+- `pipeline/contract.py` — read an employment contract + grounded Q&A (specs.md §2)
 - `pipeline/pipeline.py` — orchestrator (message → verified claims)
-- `app/webhook.py` — FastAPI service (`/transcribe`, `/extract`, `/translate`, `/process`)
+- `app/webhook.py` — FastAPI service (`/transcribe`, `/extract`, `/translate`, `/process`, `/contract`, `/contract/ask`)
 - `app/api.py` — re-exports `app.webhook:app` for compatibility
 - `db/schema.sql` — Postgres corpus schema (documents + chunks)
 - `db/connection.py` — psycopg connection helpers (config from `.env`)

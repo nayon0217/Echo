@@ -22,7 +22,7 @@ import anthropic
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from pipeline import asr, vision
+from pipeline import asr, contract, vision
 from pipeline.pipeline import process_message
 from pipeline.translate import (
     REPLY_LANGUAGES,
@@ -112,6 +112,35 @@ class ExtractResponse(BaseModel):
     text_target: str | None = Field(default=None, description="Rendered in the worker's language.")
     target_language: str | None = None
     unintelligible: bool = False
+
+
+class ContractReadResponse(BaseModel):
+    """Result of reading a contract. `text` is returned so the caller can hold it.
+
+    This service stores nothing (policy.md §11): the extracted text goes back to the
+    Node layer, which keeps it in an in-memory session for the life of the process and
+    sends it back with each question.
+    """
+
+    is_contract: bool = Field(description="False means this isn't an employment document.")
+    is_usable: bool = Field(description="False means don't answer questions against it.")
+    confidence: float = Field(description="How well it could be read, 0-1. Self-reported.")
+    language_code: str
+    text: str = Field(description="The transcription. Empty when not usable.")
+
+
+class ContractQuestionRequest(BaseModel):
+    contract_text: str = Field(description="Text from a prior /contract call.")
+    question: str = Field(description="The worker's question, in any language.")
+    target_language: str = Field(description="ISO 639-1 reply language chosen by the worker.")
+
+
+class ContractAnswerResponse(BaseModel):
+    answerable: bool
+    answer_en: str
+    answer_target: str
+    quote: str = ""
+    needs_legal_check: bool = False
 
 
 @app.get("/health")
@@ -278,6 +307,91 @@ async def extract(
             # the extraction pass about the language; the later judgement is better.
             "detected_language": v.language_code or result.language_code,
         }
+    )
+
+
+@app.post("/contract", response_model=ContractReadResponse)
+async def read_contract_endpoint(
+    file: UploadFile = File(description="The contract — a PDF, or a photo of its pages."),
+) -> ContractReadResponse:
+    """Transcribe an employment contract so the caller can hold it and ask about it.
+
+    Takes no target_language: reading is language-agnostic and the transcription stays
+    in the document's own language. The reply language matters only at question time.
+
+    Returns the text rather than storing it — see ContractReadResponse. Nothing is
+    written to disk here; unlike /transcribe there is no temp file at all.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty document")
+
+    try:
+        result = contract.read_contract(data, file.content_type or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except anthropic.APIStatusError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"claude api error ({exc.status_code})"
+        ) from exc
+    except anthropic.APIConnectionError as exc:
+        raise HTTPException(status_code=502, detail="cannot reach claude api") from exc
+
+    if not result.is_usable:
+        print(
+            f"[contract] unusable: is_contract={result.is_contract} "
+            f"confidence={result.confidence:.3f}"
+        )
+        # Withhold the text when it isn't good enough to answer against, so a caller
+        # cannot accidentally hold and query a bad read.
+        return ContractReadResponse(
+            is_contract=result.is_contract,
+            is_usable=False,
+            confidence=round(result.confidence, 4),
+            language_code=result.language_code,
+            text="",
+        )
+
+    return ContractReadResponse(
+        is_contract=True,
+        is_usable=True,
+        confidence=round(result.confidence, 4),
+        language_code=result.language_code,
+        text=result.text,
+    )
+
+
+@app.post("/contract/ask", response_model=ContractAnswerResponse)
+def ask_contract(req: ContractQuestionRequest) -> ContractAnswerResponse:
+    """Answer one question about a contract, grounded only in its text.
+
+    The contract arrives on every request because this service holds no state. That is
+    the deliberate trade for policy.md §11 — the document lives only in the caller's
+    memory, and only for as long as that process runs.
+    """
+    if req.target_language not in REPLY_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported target_language; expected one of {sorted(REPLY_LANGUAGES)}",
+        )
+
+    try:
+        answer = contract.answer_question(req.contract_text, req.question, req.target_language)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except anthropic.APIStatusError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"claude api error ({exc.status_code})"
+        ) from exc
+    except anthropic.APIConnectionError as exc:
+        raise HTTPException(status_code=502, detail="cannot reach claude api") from exc
+
+    return ContractAnswerResponse(
+        answerable=answer.answerable,
+        answer_en=answer.answer_en,
+        answer_target=answer.answer_target,
+        quote=answer.quote,
+        needs_legal_check=answer.needs_legal_check,
     )
 
 

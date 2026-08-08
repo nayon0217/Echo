@@ -4,9 +4,9 @@
  * Pure — no I/O, no side effects — so the routing decision is testable on its own,
  * separately from the handlers that act on it (see src/handlers.js).
  *
- * WhatsApp reports many message types (video, document, sticker, location,
- * contacts, reaction, order, system, unknown). Only text, image, and voice are in
- * scope; everything else is ignored per product decision.
+ * WhatsApp reports many message types (video, sticker, location, contacts, reaction,
+ * order, system, unknown). Only text, image, voice, and document are in scope;
+ * everything else is ignored per product decision.
  */
 
 export const KIND = {
@@ -14,8 +14,10 @@ export const KIND = {
   TEXT: "text",
   /** A photo or screenshot — job ad, "MOM letter", forwarded poster. Not built yet. */
   IMAGE: "image",
-  /** A voice note or audio file. Not built yet. */
+  /** A voice note or audio file. Transcribed by Whisper. */
   VOICE: "voice",
+  /** A PDF or similar file — how an employment contract usually arrives. */
+  DOCUMENT: "document",
   /** A menu tap or button press. Not media — drives the conversation. */
   CONTROL: "control",
   /** Anything else. Deliberately ignored. */
@@ -70,6 +72,18 @@ export function classify(message) {
         isVoiceNote: Boolean(message.audio?.voice),
       };
 
+    case "document":
+      return {
+        kind: KIND.DOCUMENT,
+        type,
+        mediaId: message.document?.id,
+        mimeType: message.document?.mime_type,
+        // Meta sends the original filename; workers name these things helpfully
+        // ("my contract.pdf"), and it is the one hint available before download.
+        filename: message.document?.filename ?? "",
+        caption: message.document?.caption ?? "",
+      };
+
     case "interactive":
       return {
         kind: KIND.CONTROL,
@@ -83,8 +97,8 @@ export function classify(message) {
       return { kind: KIND.CONTROL, type, replyId: message.button?.payload };
 
     default:
-      // video, document, sticker, location, contacts, reaction, order, system,
-      // unknown, and anything Meta adds later.
+      // video, sticker, location, contacts, reaction, order, system, unknown, and
+      // anything Meta adds later.
       return { kind: KIND.UNSUPPORTED, type };
   }
 }

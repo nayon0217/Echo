@@ -21,9 +21,15 @@ process.env.PIPELINE_URL = "http://pipeline.test";
 process.env.number_ID = "TEST_PHONE_ID";
 process.env.access_token = "TEST_TOKEN";
 
-const { handleText, handleVoice, handleImage, handleUnsupported, processText } = await import(
-  "../src/handlers.js"
-);
+const {
+  handleText,
+  handleVoice,
+  handleImage,
+  handleDocument,
+  handleContractQuestion,
+  handleUnsupported,
+  processText,
+} = await import("../src/handlers.js");
 
 const AUDIO = Buffer.from("fake-opus-bytes-from-whatsapp");
 
@@ -50,9 +56,12 @@ beforeEach(() => {
   globalThis.fetch = async (url, init = {}) => {
     const href = String(url);
     calls.push({ url: href, init });
-    for (const [pattern, handler] of routes) {
-      if (href.includes(pattern)) return handler(href, init);
-    }
+    // Longest pattern first, so "/contract" can't shadow "/contract/ask".
+    const matches = [...routes.keys()]
+      .filter((p) => href.includes(p))
+      .sort((a, b) => b.length - a.length);
+    if (matches.length) return routes.get(matches[0])(href, init);
+
     throw new Error(`unrouted fetch: ${href}`);
   };
 
@@ -567,6 +576,193 @@ describe("images", () => {
     });
     assert.match(result.reply, /sharper photo/i);
     assert.equal(result.verification, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contracts
+// ---------------------------------------------------------------------------
+
+const CONTRACT_TEXT = "1. Basic salary: SGD 800 per month.\n2. Notice period: one month.";
+
+const documentMessage = (overrides = {}) => ({
+  kind: "document",
+  type: "document",
+  mediaId: "DOC1",
+  mimeType: "application/pdf",
+  filename: "contract.pdf",
+  caption: "",
+  ...overrides,
+});
+
+const contractRead = (overrides = {}) => ({
+  is_contract: true,
+  is_usable: true,
+  confidence: 0.94,
+  language_code: "en",
+  text: CONTRACT_TEXT,
+  ...overrides,
+});
+
+describe("contract upload", () => {
+  test("reads the contract and hands the text back to be held", async () => {
+    mockMediaDownload("DOC1", { mimeType: "application/pdf" });
+    routes.set("/contract", () => json(contractRead()));
+
+    const result = await handleDocument(documentMessage(), { language: { code: "ta" } });
+
+    assert.match(result.reply, /I've read your contract/i);
+    assert.equal(result.contract.text, CONTRACT_TEXT);
+    assert.match(result.reply, /done/, "the worker must be told how to leave contract mode");
+  });
+
+  test("uploads the document bytes with the right media type", async () => {
+    mockMediaDownload("DOC1", { mimeType: "application/pdf" });
+    let form;
+    routes.set("/contract", (_url, init) => {
+      form = init.body;
+      return json(contractRead());
+    });
+
+    await handleDocument(documentMessage(), { language: { code: "en" } });
+
+    const file = form.get("file");
+    assert.equal(file.name, "contract.pdf");
+    assert.equal(file.type, "application/pdf");
+    assert.equal(
+      Buffer.from(await file.arrayBuffer()).toString(),
+      AUDIO.toString(),
+      "the bytes downloaded from Meta must be the bytes sent to the pipeline",
+    );
+  });
+
+  test("a document that isn't a contract gets a specific explanation", async () => {
+    mockMediaDownload("DOC1");
+    routes.set("/contract", () => json(contractRead({ is_contract: false, is_usable: false, text: "" })));
+
+    const result = await handleDocument(documentMessage(), { language: { code: "en" } });
+
+    assert.match(result.reply, /doesn't look like an employment contract/i);
+    assert.equal(result.contract, undefined, "nothing should be held");
+  });
+
+  test("an unreadable contract is refused rather than half-used", async () => {
+    // The strictest gate in the pipeline: a misread salary would be quoted back to
+    // someone with no other way to check it.
+    mockMediaDownload("DOC1");
+    routes.set("/contract", () =>
+      json(contractRead({ is_usable: false, confidence: 0.35, text: "" })),
+    );
+
+    const result = await handleDocument(documentMessage(), { language: { code: "en" } });
+
+    assert.match(result.reply, /couldn't read it clearly enough/i);
+    assert.equal(result.contract, undefined, "an unusable contract must never be held");
+  });
+
+  test("handles a failed download", async () => {
+    routes.set("graph.facebook.com", () => json({ error: "not found" }, 404));
+
+    const result = await handleDocument(documentMessage(), { language: { code: "en" } });
+    assert.match(result.reply, /couldn't download/i);
+    assert.equal(result.contract, undefined);
+  });
+
+  test("degrades gracefully when the pipeline is unreachable", async () => {
+    mockMediaDownload("DOC1");
+    routes.set("/contract", () => {
+      throw new TypeError("fetch failed");
+    });
+
+    const result = await handleDocument(documentMessage(), { language: { code: "en" } });
+    assert.match(result.reply, /try again/i);
+    assert.equal(result.contract, undefined);
+  });
+});
+
+describe("contract questions", () => {
+  const session = (overrides = {}) => ({
+    language: { code: "ta" },
+    contract: { text: CONTRACT_TEXT },
+    ...overrides,
+  });
+
+  const answer = (overrides = {}) => ({
+    answerable: true,
+    answer_en: "Your basic salary is SGD 800 per month.",
+    answer_target: "உங்கள் அடிப்படை சம்பளம் மாதம் SGD 800.",
+    quote: "Basic salary: SGD 800 per month.",
+    needs_legal_check: false,
+    ...overrides,
+  });
+
+  test("answers in the worker's language and shows the clause it relied on", async () => {
+    routes.set("/contract/ask", () => json(answer()));
+
+    const result = await handleContractQuestion("how much do I earn?", session());
+
+    assert.match(result.reply, /SGD 800/);
+    assert.match(result.reply, /Your contract says/);
+    assert.match(result.reply, /Basic salary: SGD 800 per month\./);
+  });
+
+  test("sends the held contract text with the question", async () => {
+    let sent;
+    routes.set("/contract/ask", (_url, init) => {
+      sent = JSON.parse(init.body);
+      return json(answer());
+    });
+
+    await handleContractQuestion("what notice must I give?", session());
+
+    assert.equal(sent.contract_text, CONTRACT_TEXT);
+    assert.equal(sent.question, "what notice must I give?");
+    assert.equal(sent.target_language, "ta");
+  });
+
+  test("an unanswerable question says so and quotes nothing", async () => {
+    routes.set("/contract/ask", () =>
+      json(
+        answer({
+          answerable: false,
+          answer_en: "Your contract does not mention overtime pay.",
+          answer_target: "உங்கள் ஒப்பந்தத்தில் மேலதிக நேர ஊதியம் பற்றி இல்லை.",
+          quote: "",
+        }),
+      ),
+    );
+
+    const result = await handleContractQuestion("what is my overtime rate?", session());
+
+    assert.doesNotMatch(result.reply, /Your contract says/, "nothing to quote");
+    assert.match(result.reply, /மேலதிக/);
+  });
+
+  test("a legality question points to MOM instead of answering it", async () => {
+    // We were handed the contract, not the law. Implying otherwise would be inventing
+    // legal advice for someone who cannot check it.
+    routes.set("/contract/ask", () => json(answer({ needs_legal_check: true })));
+
+    const result = await handleContractQuestion("is this deduction legal?", session());
+
+    assert.match(result.reply, /can't tell you whether that's allowed/i);
+    assert.match(result.reply, /1800 339 5505/);
+  });
+
+  test("falls back to English when the target rendering is missing", async () => {
+    routes.set("/contract/ask", () => json(answer({ answer_target: "" })));
+    const result = await handleContractQuestion("how much do I earn?", session());
+    assert.match(result.reply, /Your basic salary is SGD 800/);
+  });
+
+  test("degrades gracefully when the pipeline is unreachable", async () => {
+    routes.set("/contract/ask", () => {
+      throw new TypeError("fetch failed");
+    });
+
+    const result = await handleContractQuestion("how much do I earn?", session());
+    assert.match(result.reply, /try again/i);
+    assert.equal(result.translation, null);
   });
 });
 

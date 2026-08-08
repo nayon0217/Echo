@@ -226,6 +226,69 @@ def text_image(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def contract_pdf(text_image):
+    """Factory: (pages) -> (bytes, "application/pdf") for a multi-page document.
+
+    Rendered rather than sourced from a real contract for the obvious reason — we need
+    to know exactly what terms are in it to assert on the answers, and a real migrant
+    worker's contract is not something to commit to a test fixture.
+    """
+    import io
+
+    from PIL import Image
+
+    def make(pages):
+        if isinstance(pages[0], str):
+            pages = [pages]
+
+        images = []
+        for lines in pages:
+            data, _ = text_image(lines, fmt="PNG")
+            images.append(Image.open(io.BytesIO(data)).convert("RGB"))
+
+        buf = io.BytesIO()
+        images[0].save(
+            buf, format="PDF", save_all=True, append_images=images[1:], resolution=150.0
+        )
+        return buf.getvalue(), "application/pdf"
+
+    return make
+
+
+# A small but realistic employment contract: the terms a worker actually asks about,
+# plus one deliberate gap (overtime) to test that abstention works.
+CONTRACT_PAGE_1 = [
+    "EMPLOYMENT CONTRACT",
+    "",
+    "Employer: Sunrise Cleaning Services Pte Ltd",
+    "Employee: [name]    Passport: X1234567A",
+    "",
+    "1. BASIC SALARY",
+    "   The Employee shall be paid SGD 650 per month.",
+    "",
+    "2. WORKING HOURS",
+    "   44 hours per week, six days per week.",
+    "",
+    "3. REST DAY",
+    "   One rest day per week, on Sunday.",
+]
+
+CONTRACT_PAGE_2 = [
+    "4. DEDUCTIONS",
+    "   The Employer may deduct SGD 120 per month for",
+    "   accommodation and SGD 90 per month for meals.",
+    "",
+    "5. NOTICE PERIOD",
+    "   Either party may terminate this contract by giving",
+    "   one (1) month written notice.",
+    "",
+    "6. ANNUAL LEAVE",
+    "   The Employee is entitled to 7 days paid annual",
+    "   leave per year.",
+]
+
+
+@pytest.fixture(scope="session")
 def photo_without_text(text_image):
     """A picture with no writing in it — the has_text=False case, not a bad read."""
     import io

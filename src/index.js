@@ -9,7 +9,14 @@ import {
 } from "./languages.js";
 import { isHealthy, PIPELINE_URL } from "./pipeline.js";
 import { KIND, classify } from "./media.js";
-import { handleText, handleImage, handleVoice, handleUnsupported } from "./handlers.js";
+import {
+  handleText,
+  handleImage,
+  handleVoice,
+  handleDocument,
+  handleContractQuestion,
+  handleUnsupported,
+} from "./handlers.js";
 
 const app = express();
 app.use(express.json());
@@ -36,10 +43,32 @@ function alreadyHandled(id) {
 function sessionFor(from) {
   let s = sessions.get(from);
   if (!s) {
-    s = { language: null, lastMessage: null };
+    // `contract` holds the text of an employment contract the sender uploaded, and is
+    // the single most sensitive thing this process keeps. It lives here and nowhere
+    // else — never on disk, never in Postgres — and dies with the process, which is
+    // what lets policy.md §11 ("no personal data retention") stand unamended.
+    s = { language: null, lastMessage: null, contract: null };
     sessions.set(from, s);
   }
   return s;
+}
+
+// Typed by the worker to leave contract mode. Kept short and matched loosely because
+// they may be typing in a second language on a phone keyboard.
+const EXIT_CONTRACT_WORDS = new Set([
+  "done",
+  "exit",
+  "stop",
+  "back",
+  "finish",
+  "finished",
+  "cancel",
+]);
+
+function wantsToLeaveContractMode(text) {
+  if (!text) return false;
+  const cleaned = text.trim().toLowerCase().replace(/[.!?]+$/, "");
+  return EXIT_CONTRACT_WORDS.has(cleaned);
 }
 
 app.get("/", (_req, res) => res.send("ECHO WhatsApp bot is running."));
@@ -108,6 +137,30 @@ async function handleMessage(message) {
     return;
   }
 
+  // Holding a contract puts the sender in contract mode: their typed messages are
+  // questions about that document, not new claims to verify. Deterministic — no
+  // per-message classifier call, and they leave with one word.
+  //
+  // Only TEXT is captured. A forwarded voice note or image is still content to check,
+  // so those fall through to the normal path and the contract stays held.
+  if (session.contract && c.kind === KIND.TEXT) {
+    if (wantsToLeaveContractMode(c.text)) {
+      session.contract = null;
+      console.log(`[route] ${from} left contract mode`);
+      await sendText(
+        from,
+        "Okay — I've forgotten your contract. Send me a message, voice note, or image " +
+          "to check, or send the contract again any time.",
+      );
+      return;
+    }
+
+    console.log(`[route] ${from} -> contract question`);
+    const result = await handleContractQuestion(c.text, session);
+    if (result.reply) await sendText(from, result.reply);
+    return;
+  }
+
   await runAndReply(from, c, session);
 }
 
@@ -131,6 +184,13 @@ async function runAndReply(from, c, session) {
 
   const result = await dispatch(c, session);
 
+  // A document handler that read a contract successfully hands it back here to be
+  // held. This is the only place a contract enters the session.
+  if (result.contract) {
+    session.contract = result.contract;
+    console.log(`[route] ${from} entered contract mode`);
+  }
+
   if (result.reply) {
     await sendText(from, result.reply);
   }
@@ -144,6 +204,8 @@ function dispatch(c, session) {
       return handleImage(c, session);
     case KIND.VOICE:
       return handleVoice(c, session);
+    case KIND.DOCUMENT:
+      return handleDocument(c, session);
     default:
       return handleUnsupported(c, session);
   }
