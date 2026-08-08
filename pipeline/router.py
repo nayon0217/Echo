@@ -50,10 +50,16 @@ _SCHEMA = {
 
 _SYSTEM = (
     "You route messages forwarded by migrant workers in Singapore for a fact-checking service. "
-    "Classify the message on multiple independent labels. A message can be both a policy claim and a scam. "
-    "A 'policy claim' is a statement that can be phrased as 'X is true / X is false' about MOM/CPF/IRAS work-pass "
-    "or employment rules. Instructions, threats, and requests for money or personal data are scam signals, not policy claims. "
-    "Be conservative: only set contains_policy_claim when there is an actual verifiable assertion."
+    "Classify the message on multiple independent labels. A message can be BOTH a policy claim and a scam — set both flags when both apply.\n"
+    "A 'policy claim' is any statement that can be phrased as 'X is true / X is false' about Singapore migrant-worker "
+    "rules (MOM/CPF/IRAS work passes, levy, fees, eligibility, salary, entitlements, procedures, medical/insurance "
+    "requirements, deportation/cancellation consequences tied to those rules). "
+    "If such an assertion is present, set contains_policy_claim=true EVEN WHEN the message also uses threats, "
+    "urgency, or claimed authority — those are scam signals layered on top of the claim, not a reason to skip verification.\n"
+    "Scam signals (claimed_authority, urgency, payment_request, bypass_normal_channel, threat, too_good_to_be_true, "
+    "personal_data_request) are independent. Pure instructions to send money or share passwords with no checkable "
+    "policy assertion are scam-only. Be conservative on contains_policy_claim only when there is genuinely no "
+    "verifiable assertion."
 )
 
 

@@ -1,13 +1,15 @@
 import "dotenv/config";
 
-<<<<<<< HEAD
 // The Python verification pipeline (app/webhook.py). Node owns the Meta webhook
-// and acks it fast; anything needing Claude or Postgres goes through here.
+// and acks it fast; anything needing Whisper, Claude, or Postgres goes through here.
 const PIPELINE_URL = process.env.PIPELINE_URL || "http://127.0.0.1:8000";
 
 // Claude calls take a couple of seconds; cap the wait so a hung pipeline doesn't
 // hold the handler open indefinitely.
 const TIMEOUT_MS = Number(process.env.PIPELINE_TIMEOUT_MS) || 20000;
+
+// Full claim verification (route + extract + retrieve + LLM T/F) can take longer.
+const PROCESS_TIMEOUT_MS = Number(process.env.PIPELINE_PROCESS_TIMEOUT_MS) || 120000;
 
 /**
  * Detect a message's language and translate it to English.
@@ -35,6 +37,126 @@ export async function translate(text) {
     console.error(`[pipeline] /translate unreachable: ${err.name}`);
     return null;
   }
+}
+
+/**
+ * Run claim extraction + DB retrieval + LLM true/false verification.
+ *
+ * @param {string} text  original or English pivot text
+ * @param {string|null} language  worker's reply language code
+ * @param {{ text_en?: string, source_language?: string }} [opts]
+ * @returns {Promise<object>}
+ */
+export async function processMessage(text, language, opts = {}) {
+  const body = {
+    text,
+    language: language || null,
+    with_verify: true,
+  };
+  if (opts.text_en) body.text_en = opts.text_en;
+  if (opts.source_language) body.source_language = opts.source_language;
+  if (opts.mediaKind) body.media_kind = opts.mediaKind;
+
+  const res = await fetch(`${PIPELINE_URL}/process`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(PROCESS_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`pipeline ${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
+const MOM_HOTLINE = "the MOM hotline (6438 5122)";
+const SCAM_CONTACT = "the MOM hotline (6438 5122) or ScamShield (1799)";
+
+function reframeClaim(text) {
+  return (text || "").trim().replace(/[.?!]+$/, "");
+}
+
+function formatAiDetection(status) {
+  switch (status) {
+    case "ai_generated":
+      return "⚠️ This may be AI-made. Do not trust it without checking.";
+    case "likely_ai":
+      return "⚠️ This might be AI-made. Be careful before you share or act.";
+    case "not_ai":
+      return "✅ This does not look AI-made. The information can still be wrong.";
+    default:
+      return null;
+  }
+}
+
+/** Fallback claim formatter when the Python compose stage did not return `reply`. */
+function formatClaim(c, mediaKind = null) {
+  const cited = (c.cited_sources ?? [])[0];
+  const url = cited?.source_url;
+  const sourceName = cited?.source_name || "MOM";
+
+  if (c.verdict === "supported") {
+    let msg = `✅ True.\nThis matches ${sourceName}.`;
+    if (url) msg += `\nRead more: ${url}`;
+    return msg;
+  }
+
+  if (c.verdict === "refuted") {
+    const headline =
+      mediaKind === "voice" ? "❌ This voice message is false." : "❌ False.";
+    let msg = `${headline}\nNo clear evidence that ${reframeClaim(c.text)}.`;
+    if (url) msg += `\nRead more: ${url}`;
+    return msg;
+  }
+
+  return (
+    "🤔 I can't confirm this.\n" +
+    `There is not enough official information. To be safe, call ${MOM_HOTLINE}.`
+  );
+}
+
+/**
+ * Prefer stage-10 `reply` from Python; fall back to local templates.
+ * @param {object} result
+ * @param {{ mediaKind?: "voice"|"image"|"text" }} [opts]
+ */
+export function formatReply(result, opts = {}) {
+  const mediaKind = opts.mediaKind || null;
+
+  // Stage 10 compose (Python) already includes AI/scam text and localisation.
+  if (result?.reply && typeof result.reply === "string" && result.reply.trim()) {
+    return result.reply.trim();
+  }
+
+  const parts = [];
+  const aiMsg = formatAiDetection(result?.ai_detection);
+  if (aiMsg) parts.push(aiMsg);
+
+  const claims = result?.claims ?? [];
+  if (claims.length === 1) {
+    parts.push(formatClaim(claims[0], mediaKind));
+  } else if (claims.length > 1) {
+    parts.push(
+      claims
+        .slice(0, 2)
+        .map((c, i) => `${i + 1}. ${formatClaim(c, mediaKind)}`)
+        .join("\n\n"),
+    );
+  }
+
+  if (result?.scam?.is_scam_suspected) {
+    parts.push(
+      `⚠️ Possible scam.\nDo not send money or click links. If unsure, call ${SCAM_CONTACT}.`,
+    );
+  }
+
+  if (parts.length === 0) {
+    if (result?.notice) return result.notice;
+    return `I could not find anything to check. If unsure, call ${MOM_HOTLINE}.`;
+  }
+
+  return parts.join("\n\n");
 }
 
 // Transcription is far slower than translation — a long voice note through
@@ -151,115 +273,3 @@ export async function isHealthy() {
 }
 
 export { PIPELINE_URL };
-=======
-// The Python verification pipeline runs as a local FastAPI service (app/api.py).
-// The bot POSTs forwarded messages here and formats the result for WhatsApp.
-const PIPELINE_URL = process.env.PIPELINE_URL || "http://127.0.0.1:8000";
-
-// Calls the pipeline's /process endpoint. Returns the parsed result, or throws.
-export async function processMessage(text, language) {
-  const res = await fetch(`${PIPELINE_URL}/process`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, language }),
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`pipeline ${res.status}: ${detail}`);
-  }
-  return res.json();
-}
-
-const MOM_HOTLINE = "the MOM hotline (6438 5122)";
-const SCAM_CONTACT = "the MOM hotline (6438 5122) or ScamShield (1799)";
-
-// Reframes a claim as the object of "There is no evidence that …".
-// Casing is left unchanged: claims often start with proper nouns ("Work Permit",
-// "MOM") that read wrong when lowercased, and a capital after "that" is fine.
-function reframeClaim(text) {
-  return (text || "").trim().replace(/[.?!]+$/, "");
-}
-
-// Synthetic-media detection templates. Not yet produced by the pipeline; fires
-// when a `result.ai_detection` field is present ("ai_generated" | "likely_ai" | "not_ai").
-function formatAiDetection(status) {
-  switch (status) {
-    case "ai_generated":
-      return (
-        "⚠️ This appears to be AI-generated.\n" +
-        "We found signs like an artificial voice/image, and unusual details or editing patterns. " +
-        "AI can create convincing fake content, so don't trust it without checking."
-      );
-    case "likely_ai":
-      return (
-        "⚠️ This is probably AI-generated.\n" +
-        "We found several signs of AI, but we are not completely certain. " +
-        "Please be careful and check before sharing or acting on it."
-      );
-    case "not_ai":
-      return (
-        "✅ This does not appear to be AI-generated.\n" +
-        "That doesn't mean the information is true. Real photos and voice recordings can still contain false information. " +
-        "If you'd like, we can check whether the claim itself is true."
-      );
-    default:
-      return null;
-  }
-}
-
-// Formats a single verified claim using the reply templates.
-function formatClaim(c) {
-  const cited = (c.cited_sources ?? [])[0];
-  const url = cited?.source_url;
-  const sourceName = cited?.source_name || "MOM";
-
-  if (c.verdict === "supported") {
-    let msg = `✅ This claim is true.\nIt matches information from ${sourceName}.`;
-    if (url) msg += ` You can read the official announcement here: ${url}`;
-    return msg;
-  }
-
-  if (c.verdict === "refuted") {
-    let msg = `❌ The claim is false.\nThere is no evidence that ${reframeClaim(c.text)}.`;
-    if (url) msg += ` You can read more here: ${url}`;
-    return msg;
-  }
-
-  // insufficient
-  return (
-    "🤔 I couldn't confirm this claim.\n" +
-    `There isn't enough official information to say if it's true or false. To be safe, contact ${MOM_HOTLINE}.`
-  );
-}
-
-// Builds the WhatsApp reply text from a pipeline result.
-export function formatReply(result) {
-  const parts = [];
-
-  // Synthetic-media verdict first, if available.
-  const aiMsg = formatAiDetection(result?.ai_detection);
-  if (aiMsg) parts.push(aiMsg);
-
-  // Scam warning.
-  if (result?.scam?.is_scam_suspected) {
-    parts.push(
-      `⚠️ This is a scam.\nDo not send money or click any links. If you're unsure, contact ${SCAM_CONTACT}.`,
-    );
-  }
-
-  const claims = result?.claims ?? [];
-  if (claims.length === 1) {
-    parts.push(formatClaim(claims[0]));
-  } else if (claims.length > 1) {
-    parts.push(claims.map((c, i) => `${i + 1}. ${c.text}\n${formatClaim(c)}`).join("\n\n"));
-  }
-
-  // Nothing checkable and no scam/AI signal.
-  if (parts.length === 0) {
-    if (result?.notice) return result.notice;
-    return "I couldn't find anything to check in that message. If you're unsure, contact the MOM hotline (6438 5122).";
-  }
-
-  return parts.join("\n\n");
-}
->>>>>>> 2d5c287 (LLM layer added)

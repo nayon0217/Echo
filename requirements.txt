@@ -1,6 +1,4 @@
 # ECHO verification pipeline (Python side). Pinned loosely; tighten before demo.
-# DB layer only for now — pipeline deps (faster-whisper, fastapi, etc.) get
-# added in later phases per policy.md §12.
 
 psycopg[binary]>=3.2,<4      # Postgres driver (v3), binary build = no local libpq needed
 python-dotenv>=1.0,<2        # load DATABASE_URL and friends from .env
@@ -9,9 +7,8 @@ python-dotenv>=1.0,<2        # load DATABASE_URL and friends from .env
 trafilatura>=1.12,<3         # HTML -> clean text/markdown extraction
 PyYAML>=6.0,<7               # parse ingest/sources.yaml
 
-<<<<<<< HEAD
-# --- Pipeline: translate + serve (policy.md §1 stage 2, §13) ---
-anthropic>=0.70              # Claude client; pipeline/translate.py
+# --- Pipeline HTTP + LLM (policy.md §1–§2, §4–§7, §13) ---
+anthropic>=0.70              # Claude client; structured output / tool-use
 pydantic>=2.7,<3             # schema-enforced LLM output (policy.md §2)
 fastapi>=0.115,<1            # app/webhook.py
 uvicorn[standard]>=0.30,<1   # ASGI server for the above
@@ -19,11 +16,3 @@ python-multipart>=0.0.9      # file uploads to /transcribe and /extract
 
 # --- Speech to text (policy.md §1 stage 1, §2) ---
 faster-whisper>=1.1,<2       # CTranslate2 Whisper; exposes per-segment logprobs
-=======
-# --- LLM pipeline (policy.md §2, §4-§7) ---
-anthropic>=0.40,<1           # Claude API; structured output via forced tool-use
-
-# --- Pipeline HTTP service (bridges the Node WhatsApp bot to the Python pipeline) ---
-fastapi>=0.110,<1
-uvicorn[standard]>=0.29,<1
->>>>>>> 2d5c287 (LLM layer added)

@@ -163,10 +163,7 @@ def extract_text(image_bytes: bytes, media_type: str) -> Extraction:
         model=model_name(),
         max_tokens=8192,
         system=SYSTEM_PROMPT,
-        # Reading a cluttered screenshot benefits from more deliberation than
-        # detect-and-translate does, but a worker is waiting — medium, not high.
-        thinking={"type": "adaptive"},
-        output_config={"effort": "medium"},
+        # No adaptive thinking — not supported on CLAUDE_MODEL (sonnet 4.5).
         messages=[
             {
                 "role": "user",

@@ -40,19 +40,37 @@ _TRAFILATURA_CFG.set("DEFAULT", "USER_AGENTS", USER_AGENT)
 _TRAFILATURA_CFG.set("DEFAULT", "DOWNLOAD_TIMEOUT", "30")
 
 
-def load_sources(tier: int | None, limit: int | None) -> list[dict[str, Any]]:
+def load_sources(
+    tier: int | None,
+    limit: int | None,
+    *,
+    only_new: bool = False,
+    source_name: str | None = None,
+) -> list[dict[str, Any]]:
     data = yaml.safe_load(SOURCES_PATH.read_text(encoding="utf-8")) or {}
     sources = data.get("sources", [])
     if tier is not None:
         sources = [s for s in sources if int(s.get("authority_tier", 0)) == tier]
+    if source_name:
+        want = source_name.strip().lower()
+        sources = [s for s in sources if str(s.get("source_name", "")).lower() == want]
+    if only_new:
+        existing = _existing_urls()
+        sources = [s for s in sources if s.get("source_url") not in existing]
     if limit is not None:
         sources = sources[:limit]
     return sources
 
 
-def _slug_title(url: str) -> str:
-    slug = url.rstrip("/").rsplit("/", 1)[-1]
-    return slug.replace("-", " ").replace("_", " ").strip().title() or url
+def _existing_urls() -> set[str]:
+    """URLs already present in documents — used by --only-new."""
+    try:
+        from db.connection import fetch_all
+
+        return {r["source_url"] for r in fetch_all("select source_url from documents")}
+    except Exception as exc:
+        print(f"warning: could not read existing URLs ({exc}); ingesting all matches")
+        return set()
 
 
 def fetch_document(url: str) -> tuple[str, dict[str, Any]] | None:
@@ -115,13 +133,29 @@ def replace_chunks(cur, document_id: int, chunks) -> None:
         )
 
 
-def run(tier: int | None, limit: int | None, dry_run: bool) -> int:
-    sources = load_sources(tier, limit)
+def _slug_title(url: str) -> str:
+    slug = url.rstrip("/").rsplit("/", 1)[-1]
+    return slug.replace("-", " ").replace("_", " ").strip().title() or url
+
+
+def run(
+    tier: int | None,
+    limit: int | None,
+    dry_run: bool,
+    *,
+    only_new: bool = False,
+    source_name: str | None = None,
+) -> int:
+    sources = load_sources(tier, limit, only_new=only_new, source_name=source_name)
     if not sources:
-        print("No sources matched. Check sources.yaml / --tier.", file=sys.stderr)
+        print("No sources matched. Check sources.yaml / --tier / --only-new.", file=sys.stderr)
         return 1
 
     label = f"tier {tier}" if tier is not None else "all tiers"
+    if source_name:
+        label += f", source={source_name}"
+    if only_new:
+        label += ", new only"
     print(f"Ingesting {len(sources)} sources ({label}){' [dry-run]' if dry_run else ''}\n")
 
     ok = failed = total_chunks = 0
@@ -179,8 +213,20 @@ def main() -> int:
     p.add_argument("--tier", type=int, choices=[1, 2, 3], help="only sources of this authority tier")
     p.add_argument("--limit", type=int, help="only the first N matching sources")
     p.add_argument("--dry-run", action="store_true", help="fetch + chunk but do not write to the DB")
+    p.add_argument(
+        "--only-new",
+        action="store_true",
+        help="skip URLs already present in the documents table",
+    )
+    p.add_argument("--source-name", type=str, help="filter by source_name (e.g. TWC2, CNA)")
     args = p.parse_args()
-    return run(args.tier, args.limit, args.dry_run)
+    return run(
+        args.tier,
+        args.limit,
+        args.dry_run,
+        only_new=args.only_new,
+        source_name=args.source_name,
+    )
 
 
 if __name__ == "__main__":

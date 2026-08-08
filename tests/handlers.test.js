@@ -85,32 +85,45 @@ const voiceMessage = (mediaId = "MEDIA1") => ({
   isVoiceNote: true,
 });
 
+
+/** A successful /process verification response, overridable per test. */
+const verified = (overrides = {}) => ({
+  claims: [
+    {
+      text: "The work permit levy is going up to 800 dollars next month",
+      type: "levy",
+      verdict: "refuted",
+      reasoning: "No matching MOM announcement.",
+      cited_sources: [],
+      gates_triggered: [],
+      top_score: 0.01,
+    },
+  ],
+  notice: null,
+  scam: null,
+  ...overrides,
+});
+
+
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
 
 describe("text messages", () => {
-  test("replies with the detected language and the English translation", async () => {
-    routes.set("/translate", () =>
-      json({
-        language_code: "id",
-        language_name: "Indonesian",
-        text_en: "Is the levy going up to 800 dollars?",
-        unintelligible: false,
-        is_english: false,
-        can_reply_in_language: true,
-      }),
+  test("sends the message to /process and replies with a T/F verdict", async () => {
+    routes.set("/process", () => json(verified()));
+
+    const result = await handleText(
+      { kind: "text", text: "Levy naik jadi 800 dolar?" },
+      { language: { code: "en", title: "English" } },
     );
 
-    const result = await handleText({ kind: "text", text: "Levy naik jadi 800 dolar?" });
+    assert.match(result.reply, /false|couldn.t confirm/i);
+    assert.equal(result.verification.claims[0].verdict, "refuted");
 
-    assert.match(result.reply, /Indonesian/);
-    assert.match(result.reply, /800/);
-    assert.equal(result.translation.language_code, "id");
-
-    // The message went up as JSON on the body, not as a query param.
     const sent = JSON.parse(calls[0].init.body);
     assert.equal(sent.text, "Levy naik jadi 800 dolar?");
+    assert.equal(sent.with_verify, true);
   });
 
   test("empty text never reaches the pipeline", async () => {
@@ -120,37 +133,35 @@ describe("text messages", () => {
   });
 
   test("degrades gracefully when the pipeline is down", async () => {
-    routes.set("/translate", () => {
+    routes.set("/process", () => {
       throw new TypeError("fetch failed");
     });
 
-    const result = await handleText({ kind: "text", text: "hello" });
-    assert.match(result.reply, /try again/i);
-    assert.equal(result.translation, null);
+    const result = await handleText({ kind: "text", text: "hello" }, { language: { code: "en" } });
+    assert.match(result.reply, /try again|couldn.t check/i);
+    assert.equal(result.verification, null);
   });
 
   test("degrades gracefully on a pipeline 502", async () => {
-    routes.set("/translate", () => json({ detail: "claude api error" }, 502));
+    routes.set("/process", () => json({ detail: "claude api error" }, 502));
 
-    const result = await handleText({ kind: "text", text: "hello" });
-    assert.match(result.reply, /try again/i);
+    const result = await handleText({ kind: "text", text: "hello" }, { language: { code: "en" } });
+    assert.match(result.reply, /try again|couldn.t check/i);
   });
 
-  test("asks for a resend when the message is unintelligible", async () => {
-    routes.set("/translate", () =>
-      json({
-        language_code: "und",
-        language_name: "Unknown",
-        text_en: "",
-        unintelligible: true,
-        is_english: false,
-        can_reply_in_language: false,
-      }),
+  test("surfaces the pipeline notice when nothing is checkable", async () => {
+    routes.set("/process", () =>
+      json(
+        verified({
+          claims: [],
+          notice:
+            "I can't verify this message — it doesn't contain a policy claim I can check. If you're unsure, call the MOM hotline 6438 5122.",
+        }),
+      ),
     );
 
-    const result = await handleText({ kind: "text", text: "🙂🙂🙂" });
-    assert.match(result.reply, /send it again/i);
-    assert.equal(result.translation, null);
+    const result = await handleText({ kind: "text", text: "🙂🙂🙂" }, { language: { code: "en" } });
+    assert.match(result.reply, /can.t verify|hotline/i);
   });
 });
 
@@ -159,7 +170,7 @@ describe("text messages", () => {
 // ---------------------------------------------------------------------------
 
 describe("voice notes", () => {
-  test("downloads, transcribes, and replies in the worker's chosen language", async () => {
+  test("downloads, transcribes, verifies, and replies with a T/F verdict", async () => {
     mockMediaDownload("MEDIA1");
     routes.set("/transcribe", () =>
       json({
@@ -176,14 +187,22 @@ describe("voice notes", () => {
         unintelligible: false,
       }),
     );
+    routes.set("/process", () => json(verified()));
 
     const result = await handleVoice(voiceMessage(), {
       language: { code: "ta", title: "தமிழ்" },
     });
 
-    assert.match(result.reply, /Here's what I heard/);
+    assert.match(result.reply, /Heard:|கேட்டது:/);
     assert.match(result.reply, /800/);
+    assert.match(result.reply, /false|couldn.t confirm|True|False/i);
     assert.equal(result.translation.spoken_language, "id");
+    assert.equal(result.verification.claims[0].verdict, "refuted");
+
+    const processBody = JSON.parse(calls.find((c) => c.url.includes("/process")).init.body);
+    assert.equal(processBody.text_en, "The levy is going up to 800 dollars next month");
+    assert.equal(processBody.source_language, "id");
+    assert.equal(processBody.language, "ta");
   });
 
   test("uploads the audio bytes and the chosen language as multipart", async () => {
@@ -205,6 +224,7 @@ describe("voice notes", () => {
         unintelligible: false,
       });
     });
+    routes.set("/process", () => json(verified({ claims: [] , notice: "nothing to check" })));
 
     await handleVoice(voiceMessage(), { language: { code: "en", title: "English" } });
 
@@ -239,6 +259,7 @@ describe("voice notes", () => {
         unintelligible: false,
       });
     });
+    routes.set("/process", () => json(verified({ claims: [], notice: "nothing to check" })));
 
     await handleVoice(voiceMessage(), {});
     assert.equal(target, "en");
@@ -368,17 +389,36 @@ const extracted = (overrides = {}) => ({
 });
 
 describe("images", () => {
-  test("downloads, reads, and replies in the worker's chosen language", async () => {
+  test("downloads, reads, verifies, and replies with a T/F verdict", async () => {
     mockMediaDownload("IMG1", { mimeType: "image/jpeg" });
     routes.set("/extract", () => json(extracted()));
+    routes.set("/process", () =>
+      json(
+        verified({
+          claims: [
+            {
+              text: "A job in Singapore pays $4,800 a month",
+              type: "salary",
+              verdict: "insufficient",
+              reasoning: "",
+              cited_sources: [],
+              gates_triggered: [],
+              top_score: 0,
+            },
+          ],
+        }),
+      ),
+    );
 
     const result = await handleImage(imageMessage(), {
       language: { code: "ta", title: "தமிழ்" },
     });
 
-    assert.match(result.reply, /Here's what that image says/);
+    assert.match(result.reply, /Image text:|பட உரை:/);
     assert.match(result.reply, /4,800/);
+    assert.match(result.reply, /couldn.t confirm|can.t confirm|True|False/i);
     assert.equal(result.translation.detected_language, "id");
+    assert.equal(result.verification.claims[0].verdict, "insufficient");
   });
 
   test("uploads the image bytes and chosen language as multipart", async () => {
@@ -388,6 +428,7 @@ describe("images", () => {
       form = init.body;
       return json(extracted());
     });
+    routes.set("/process", () => json(verified({ claims: [], notice: "nothing" })));
 
     await handleImage(imageMessage(), { language: { code: "ta" } });
 
@@ -411,6 +452,7 @@ describe("images", () => {
       target = init.body.get("target_language");
       return json(extracted());
     });
+    routes.set("/process", () => json(verified({ claims: [], notice: "nothing" })));
 
     await handleImage(imageMessage(), {});
     assert.equal(target, "en");
@@ -484,15 +526,13 @@ describe("images", () => {
     // actual question is. Using it beats making them re-send the photo.
     mockMediaDownload("IMG1");
     routes.set("/extract", () => json(extracted({ untranscribable: true, text_target: null })));
-    routes.set("/translate", () =>
-      json({
-        language_code: "id",
-        language_name: "Indonesian",
-        text_en: "Is this job offer real?",
-        unintelligible: false,
-        is_english: false,
-        can_reply_in_language: true,
-      }),
+    routes.set("/process", () =>
+      json(
+        verified({
+          claims: [],
+          notice: "I can't verify this message — it doesn't contain a policy claim I can check.",
+        }),
+      ),
     );
 
     const result = await handleImage(imageMessage("Apakah lowongan ini asli?"), {
@@ -500,8 +540,8 @@ describe("images", () => {
     });
 
     assert.match(result.reply, /couldn't read the image/i);
-    assert.match(result.reply, /Is this job offer real\?/);
-    assert.ok(result.translation, "the caption's translation should be returned");
+    assert.match(result.reply, /can.t verify|policy claim/i);
+    assert.ok(result.verification, "the caption should still be verified");
   });
 
   test("no caption means no fallback call", async () => {
@@ -512,21 +552,21 @@ describe("images", () => {
 
     assert.match(result.reply, /sharper photo/i);
     assert.ok(
-      !calls.some((c) => c.url.includes("/translate")),
-      "an empty caption must not trigger a translate call",
+      !calls.some((c) => c.url.includes("/process")),
+      "an empty caption must not trigger a /process call",
     );
   });
 
   test("a caption that also fails leaves the image message intact", async () => {
     mockMediaDownload("IMG1");
     routes.set("/extract", () => json(extracted({ untranscribable: true, text_target: null })));
-    routes.set("/translate", () => json({ detail: "boom" }, 502));
+    routes.set("/process", () => json({ detail: "boom" }, 502));
 
     const result = await handleImage(imageMessage("is this real?"), {
       language: { code: "en" },
     });
     assert.match(result.reply, /sharper photo/i);
-    assert.equal(result.translation, null);
+    assert.equal(result.verification, null);
   });
 });
 

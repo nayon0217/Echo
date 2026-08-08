@@ -1,8 +1,7 @@
 """FastAPI service fronting the ECHO verification pipeline (policy.md §13).
 
 The Node WhatsApp layer (`src/`) owns the Meta webhook and acks it fast; it then
-calls this service for anything that needs the pipeline. Right now that is one
-stage — detect language and translate to English (policy.md §1 stage 2).
+calls this service for ASR, vision, translation, and full claim verification.
 
 Run it:
     uvicorn app.webhook:app --reload --port 8000
@@ -24,6 +23,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from pipeline import asr, vision
+from pipeline.pipeline import process_message
 from pipeline.translate import (
     REPLY_LANGUAGES,
     Translation,
@@ -181,10 +181,14 @@ async def transcribe(
     try:
         v = translate_transcript(t.text, target_language)
     except anthropic.APIStatusError as exc:
+        # Log status + body so a Claude 400 (e.g. unsupported params) is visible
+        # in the uvicorn terminal, not only as an opaque 502 to Node.
+        print(f"[transcribe] claude api error ({exc.status_code}): {exc.message}")
         raise HTTPException(
             status_code=502, detail=f"claude api error ({exc.status_code})"
         ) from exc
     except anthropic.APIConnectionError as exc:
+        print(f"[transcribe] cannot reach claude api: {exc}")
         raise HTTPException(status_code=502, detail="cannot reach claude api") from exc
 
     return base.model_copy(
@@ -296,3 +300,45 @@ def translate(req: TranslateRequest) -> TranslateResponse:
         raise HTTPException(status_code=502, detail="cannot reach claude api") from exc
 
     return TranslateResponse.from_translation(result)
+
+
+class ProcessRequest(BaseModel):
+    text: str = Field(..., description="Original or pivot text to verify.")
+    language: str | None = Field(
+        None, description="Worker's chosen reply language (BCP-47), for later localisation."
+    )
+    text_en: str | None = Field(
+        None,
+        description="Pre-translated English pivot (from ASR/vision). Skips stage-2 translate.",
+    )
+    source_language: str | None = Field(
+        None, description="Detected source language when text_en is supplied."
+    )
+    media_kind: str | None = Field(
+        None, description="voice | image | text — shapes stage-10 compose wording."
+    )
+    with_verify: bool = Field(
+        True, description="Run verdict + citation audit + gates for each claim (stages 7-9)."
+    )
+
+
+@app.post("/process")
+def process(req: ProcessRequest) -> dict:
+    """Run stages 2–10: translate → route → claims → retrieve → verify → compose."""
+    kind = req.media_kind if req.media_kind in ("voice", "image", "text") else None
+    try:
+        result = process_message(
+            req.text,
+            text_en=req.text_en,
+            source_language=req.source_language,
+            media_kind=kind,
+            reply_language=req.language,
+            with_verify=req.with_verify,
+        )
+    except Exception as exc:
+        # Surface upstream failures as 502 so the bot can degrade gracefully.
+        raise HTTPException(status_code=502, detail=f"pipeline error: {exc}") from exc
+
+    payload = result.to_dict()
+    payload["reply_language"] = req.language
+    return payload

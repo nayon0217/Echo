@@ -1,33 +1,24 @@
-<<<<<<< HEAD
 """Stage 2 of the ECHO pipeline: detect the language and translate to English.
 
 policy.md §1 lists translation as stage [2]. English is the pivot language — the
 corpus in Postgres is indexed with `to_tsvector('english', ...)`, so every inbound
 message is normalised to English before routing (§4) and claim extraction (§5) run.
 
-Text only for now. Voice notes get transcribed by faster-whisper first (phase 5,
-policy.md §12); this module is what the transcript is handed to afterwards, so
-`detect_and_translate` deliberately takes a plain string rather than a WhatsApp
-message object.
+Text only for typed messages. Voice notes are transcribed by faster-whisper first
+(policy.md §1 stage 1); this module is what the transcript is handed to afterwards,
+so `detect_and_translate` / `translate_transcript` take plain strings.
+
+`translate_to_english` is the adapter used by `pipeline.pipeline.process_message`.
 
 Output is schema-enforced (policy.md §2: "Free-text parsing is a correctness leak.
 Never regex an LLM response").
 
 Privacy (policy.md §11): this module never logs message content. Callers must not
 either — production stores verdicts and timings, never transcripts.
-=======
-"""Stage 2 — translate to English (policy.md §1).
-
-English is the pivot language for retrieval: the corpus is English, so every
-inbound message is translated before routing/claim extraction. We also capture
-the detected source language so the compose stage can later reply in the worker's
-mother tongue.
->>>>>>> 2d5c287 (LLM layer added)
 """
 
 from __future__ import annotations
 
-<<<<<<< HEAD
 import os
 from functools import lru_cache
 
@@ -115,6 +106,15 @@ class Translation(BaseModel):
         """Whether ECHO offers a reply voice in this language (see src/languages.js)."""
         return self.language_code in SUPPORTED_REPLY_LANGUAGES
 
+    # Aliases expected by pipeline.pipeline / the LLM verification stages.
+    @property
+    def source_language(self) -> str:
+        return self.language_code
+
+    @property
+    def was_translated(self) -> bool:
+        return self.language_code != "en" and not self.unintelligible
+
 
 @lru_cache(maxsize=1)
 def _client() -> anthropic.Anthropic:
@@ -148,14 +148,72 @@ def detect_and_translate(text: str) -> Translation:
         model=model_name(),
         max_tokens=8192,
         system=SYSTEM_PROMPT,
-        # Adaptive thinking at low effort: detect-and-translate is not a hard task,
-        # and this is on the critical path of a reply the worker is waiting for.
-        thinking={"type": "adaptive"},
-        output_config={"effort": "low"},
+        # No adaptive thinking: CLAUDE_MODEL (sonnet 4.5) rejects it with 400, which
+        # surfaced as /transcribe 502 after Whisper succeeded.
         messages=[{"role": "user", "content": f"<message>\n{text}\n</message>"}],
         output_format=Translation,
     )
     return response.parsed_output
+
+
+def translate_to_english(text: str) -> Translation:
+    """Adapter used by `pipeline.pipeline.process_message` (stages 2–9)."""
+    return detect_and_translate(text)
+
+
+def localize_reply(text: str, target_language: str) -> str:
+    """Translate a finished English reply into the worker's chosen language.
+
+    Preserves emojis, URLs, phone numbers, and meaning. Used by stage-10 compose.
+    """
+    if not text or not text.strip():
+        return text
+    target_name = REPLY_LANGUAGES.get(target_language)
+    if target_name is None:
+        raise ValueError(
+            f"unsupported target language {target_language!r}; "
+            f"expected one of {sorted(REPLY_LANGUAGES)}"
+        )
+    if target_language == "en":
+        return text.strip()
+
+    system = (
+        f"You translate short WhatsApp replies for migrant workers in Singapore into {target_name}.\n"
+        "Rules:\n"
+        "- Keep the meaning exact. Use simple, clear words.\n"
+        "- Keep every emoji, URL, and phone number unchanged.\n"
+        "- Do not add new advice, warnings, or commentary.\n"
+        "- Output only the translated message."
+    )
+    response = _client().messages.create(
+        model=model_name(),
+        max_tokens=2048,
+        system=system,
+        messages=[{"role": "user", "content": text.strip()}],
+    )
+    parts = []
+    for block in response.content:
+        if getattr(block, "type", None) == "text" and getattr(block, "text", None):
+            parts.append(block.text)
+    out = "\n".join(parts).strip()
+    return out or text.strip()
+
+
+def translation_from_english(
+    text_en: str, *, source_language: str = "en", language_name: str | None = None
+) -> Translation:
+    """Build a Translation when English is already available (e.g. after ASR).
+
+    Skips a second Claude translate call for the voice/image path.
+    """
+    code = (source_language or "en").lower()
+    name = language_name or REPLY_LANGUAGES.get(code) or code
+    return Translation(
+        language_code=code,
+        language_name=name,
+        text_en=(text_en or "").strip(),
+        unintelligible=not (text_en or "").strip(),
+    )
 
 
 class VoiceTranslation(BaseModel):
@@ -251,8 +309,6 @@ def translate_transcript(
         model=model_name(),
         max_tokens=8192,
         system=system,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "low"},
         messages=[{"role": "user", "content": f"<message>\n{text}\n</message>"}],
         output_format=VoiceTranslation,
     )
@@ -286,57 +342,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-=======
-from dataclasses import dataclass
-
-from .llm import structured_call
-
-_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "source_language": {
-            "type": "string",
-            "description": "BCP-47 / ISO 639-1 code of the input language, e.g. en, bn, ta, zh, id, ms, my, ta.",
-        },
-        "was_translated": {
-            "type": "boolean",
-            "description": "True if the input was not already English and had to be translated.",
-        },
-        "text_en": {
-            "type": "string",
-            "description": "The message in fluent English. If already English, return it unchanged.",
-        },
-    },
-    "required": ["source_language", "was_translated", "text_en"],
-}
-
-_SYSTEM = (
-    "You are a translator for a Singapore migrant-worker information service. "
-    "Translate the user's message into clear, faithful English for a fact-checking pipeline. "
-    "Preserve every factual detail: figures, dates, agency names, fees, and any instructions. "
-    "Do not summarise, answer, or add commentary. If the text is already English, return it unchanged."
-)
-
-
-@dataclass
-class Translation:
-    source_language: str
-    was_translated: bool
-    text_en: str
-
-
-def translate_to_english(text: str) -> Translation:
-    result = structured_call(
-        system=_SYSTEM,
-        user=text,
-        schema=_SCHEMA,
-        tool_name="record_translation",
-        tool_description="Record the detected source language and the English translation.",
-        max_tokens=1500,
-    )
-    return Translation(
-        source_language=result.get("source_language", "und"),
-        was_translated=bool(result.get("was_translated", False)),
-        text_en=result.get("text_en", text).strip() or text,
-    )
->>>>>>> 2d5c287 (LLM layer added)

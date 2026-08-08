@@ -12,9 +12,13 @@
 #   3 = ST / CNA reporting                 (dating changes only, never sole support)
 #
 # Scope note: this build is the policy fact-checking path (policy.md scope line).
-# SPF ScamAlert (also tier 1) is deferred — the scam path is stubbed, and
-# scamalert.sg's robots.txt sets AI-usage content signals we should honour before
-# ingesting it. Revisit when the scam handler is built.
+# SPF ScamAlert (also tier 1) remains deferred — scamalert.sg robots.txt / AI-usage
+# signals mean we should not scrape it until the scam handler is built with an
+# explicit rights-cleared corpus.
+#
+# Tier 2–3 pages are curated (not mass-crawled). Tier 3 is for dating policy
+# changes only; verify.py gate 4 refuses supported/refuted verdicts that rest
+# solely on tier-3 citations.
 
 sources:
   # --- MOM: Work Permit core (key facts, conditions, lifecycle) ---
@@ -182,3 +186,155 @@ sources:
     authority_tier: 1
     category: employment
     source_url: https://www.mom.gov.sg/employment-practices/employment-act/who-is-covered
+
+  # --- CPF (tier 1): employer obligations touching foreign workers ---
+  - source_name: CPF
+    authority_tier: 1
+    category: cpf_employer
+    source_url: https://www.cpf.gov.sg/employer/employer-obligations
+  - source_name: CPF
+    authority_tier: 1
+    category: cpf_employer
+    source_url: https://www.cpf.gov.sg/employer/employer-obligations/skills-development-levy
+  - source_name: CPF
+    authority_tier: 1
+    category: cpf_employer
+    source_url: https://www.cpf.gov.sg/employer/employer-obligations/how-much-cpf-contributions-to-pay
+
+  # --- IRAS (tier 1): tax residency / clearance for work-pass holders ---
+  - source_name: IRAS
+    authority_tier: 1
+    category: tax
+    source_url: https://www.iras.gov.sg/taxes/individual-income-tax/basics-of-individual-income-tax/tax-residency-and-tax-rates/working-out-my-tax-residency
+  - source_name: IRAS
+    authority_tier: 1
+    category: tax
+    source_url: https://www.iras.gov.sg/taxes/individual-income-tax/employees/scenario-based-faqs-for-working-in-singapore-and-abroad/tax-clearance-for-non-singapore-citizen-employees
+
+  # --- TWC2 (tier 2): fills gaps MOM pages don't spell out for workers ---
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_explainers
+    source_url: https://twc2.org.sg/what-we-say/glossary/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_explainers
+    source_url: https://twc2.org.sg/promoting-systemic-change/laws-and-labour-protection/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_salary
+    source_url: https://twc2.org.sg/2020/01/28/what-does-monthly-deduction-for-others-actually-mean/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_salary
+    source_url: https://twc2.org.sg/2017/11/10/basic-salary-stated-in-ipa-is-prima-facie-the-applicable-basic-salary-rules-the-high-court/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_salary
+    source_url: https://twc2.org.sg/2025/08/11/from-one-bucket-to-another/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_salary
+    source_url: https://twc2.org.sg/2022/01/28/facebook-publicity-insufficient-if-definition-of-kickback-remains-narrow/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_injury
+    source_url: https://twc2.org.sg/2021/03/11/scaffolders-story-surfaces-many-issues-overtime-injury-salary-and-kickbacks/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_ipa
+    source_url: https://twc2.org.sg/2024/05/15/understanding-the-ipa/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_ipa
+    source_url: https://twc2.org.sg/2024/09/27/ipa-tampering-permits-misrepresentation-during-recruitment/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_salary
+    source_url: https://twc2.org.sg/2012/01/15/fact-sheet-correct-way-to-calculate-salaries-non-domestic-workers/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_salary
+    source_url: https://twc2.org.sg/2025/12/22/our-comments-on-moms-migrant-worker-survey-2024-part-4-ipas-and-salaries/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_injury
+    source_url: https://twc2.org.sg/2019/02/16/are-foreign-workers-abusing-wic-claims/
+  - source_name: TWC2
+    authority_tier: 2
+    category: twc2_salary
+    source_url: https://twc2.org.sg/2026/04/29/sweet-victory-bitter-outcome-fairness-and-effectiveness-of-the-salary-claims-process-at-tadm-and-the-ect/
+
+  # --- Migrant Workers' Centre (tier 2) ---
+  - source_name: MWC
+    authority_tier: 2
+    category: mwc
+    source_url: https://www.mwc.org.sg/how-we-help/settling-in-programme
+  - source_name: MWC
+    authority_tier: 2
+    category: mwc
+    source_url: https://www.mwc.org.sg/how-we-help/migrant-workers-law-centre-at-mwc
+  - source_name: MWC
+    authority_tier: 2
+    category: mwc
+    source_url: https://www.mwc.org.sg/about-us
+  - source_name: MWC
+    authority_tier: 2
+    category: mwc
+    source_url: https://www.mwc.org.sg/news/Beyond-the-unpaid-wages-What-400-migrant-workers-taught-me/
+
+  # --- CNA (tier 3): dating policy changes only — never sole support (policy.md §3, gate 4) ---
+  - source_name: CNA
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.channelnewsasia.com/singapore/work-permit-no-maximum-employment-period-age-s-pass-foreign-workers-4981096
+  - source_name: CNA
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.channelnewsasia.com/singapore/s-pass-work-salaries-permit-migrant-workers-budget-2022-mom-2538986
+  - source_name: CNA
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.channelnewsasia.com/singapore/budget-2026-foreign-workers-employment-pass-qualifying-salary-lower-wage-workers-5925671
+  - source_name: CNA
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.channelnewsasia.com/singapore/minimum-qualifying-salary-new-employment-pass-applicants-increase-in-2025-5590461
+  - source_name: CNA
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.channelnewsasia.com/singapore/work-permit-migrant-foreign-worker-older-age-limit-social-integration-4991011
+  - source_name: CNA
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.channelnewsasia.com/singapore/more-firms-foreign-hires-non-traditional-source-countries-5769696
+  - source_name: CNA
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.channelnewsasia.com/singapore/labour-market-employment-higher-skilled-jobs-vacancy-retrenchment-q4-2024-5009706
+
+  # --- Straits Times (tier 3): dating policy changes only ---
+  - source_name: ST
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.straitstimes.com/singapore/politics/work-permit-holders-can-stay-employed-in-spore-for-longer-as-mom-tweaks-foreign-worker-rules
+  - source_name: ST
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.straitstimes.com/business/work-permit-changes-ease-labour-crunch-spur-better-jobs-for-locals-industry-players
+  - source_name: ST
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.straitstimes.com/business/7-in-10-employers-satisfied-with-their-migrant-workers-mom-survey
+  - source_name: ST
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.straitstimes.com/singapore/budget-2026-salary-threshold-for-new-employment-pass-applicants-to-be-raised-to-6000-from-2027
+  - source_name: ST
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.straitstimes.com/business/askst-what-are-the-rules-around-hiring-migrant-workers-what-safeguards-are-there-to-protect-them
+  - source_name: ST
+    authority_tier: 3
+    category: news_policy_dating
+    source_url: https://www.straitstimes.com/singapore/politics/new-work-pass-for-high-earners-in-ai-and-tech-among-changes-to-spore-foreign-workforce-policies

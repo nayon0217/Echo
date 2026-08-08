@@ -1,10 +1,8 @@
-"""Pipeline orchestrator: message in, extracted claims out (policy.md §1).
+"""Pipeline orchestrator: message in, composed reply out (policy.md §1).
 
-Runs the text stages built so far:
-    stage 2 translate -> stage 3 route -> stage 4 claims -> stage 5 queries
-
-Retrieval and verification (stages 6-10) are not wired yet; this stops after
-claim extraction and returns the claims (each with generated FTS queries).
+Runs:
+    stage 2 translate -> stage 3 route -> stage 4 claims
+    -> stage 5–6 retrieve -> stages 7–9 verify -> stage 10 compose
 
     python -m pipeline.pipeline "MOM raised the work permit levy to $900 in 2026"
     echo "levy naik jadi 900 dollar" | python -m pipeline.pipeline
@@ -17,18 +15,26 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, Literal, Optional
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.claims import Claim, extract_claims  # noqa: E402
+from pipeline.compose import compose_from_result  # noqa: E402
 from pipeline.retrieve import Source, generate_queries, retrieve_for_claim  # noqa: E402
 from pipeline.router import Routing, route  # noqa: E402
 from pipeline.scam import ScamResult, handle_scam  # noqa: E402
-from pipeline.translate import Translation, translate_to_english  # noqa: E402
+from pipeline.trace import new_request_id, trace_pipeline_result  # noqa: E402
+from pipeline.translate import (  # noqa: E402
+    Translation,
+    translate_to_english,
+    translation_from_english,
+)
 from pipeline.verify import verify_claim  # noqa: E402
 
 MOM_HOTLINE = "MOM hotline 6438 5122"
+MediaKind = Optional[Literal["voice", "image", "text"]]
 
 
 def _sources_for_chunks(chunks) -> list[Source]:
@@ -41,7 +47,7 @@ def _sources_for_chunks(chunks) -> list[Source]:
         seen.add(c.document_id)
         text = c.content.strip()
         if c.heading and text.startswith(c.heading):
-            text = text[len(c.heading):].strip()
+            text = text[len(c.heading) :].strip()
         snippet = " ".join(text.split())[:240]
         sources.append(
             Source(
@@ -55,6 +61,13 @@ def _sources_for_chunks(chunks) -> list[Source]:
             )
         )
     return sources
+
+
+def _translation_dict(t: Translation) -> dict[str, Any]:
+    d = t.model_dump()
+    d["source_language"] = t.source_language
+    d["was_translated"] = t.was_translated
+    return d
 
 
 @dataclass
@@ -78,22 +91,32 @@ class PipelineResult:
     claims: list[ExtractedClaim] = field(default_factory=list)
     scam: ScamResult | None = None
     notice: str | None = None
+    reply: str | None = None
+    request_id: str | None = None
     stage_ms: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        # asdict already recurses into nested dataclasses.
+        d["translation"] = _translation_dict(self.translation)
         return d
 
 
 def process_message(
-    text: str, *, with_queries: bool = True, with_retrieval: bool = True, with_verify: bool = True
+    text: str,
+    *,
+    text_en: str | None = None,
+    source_language: str | None = None,
+    media_kind: MediaKind = None,
+    reply_language: str | None = None,
+    with_queries: bool = True,
+    with_retrieval: bool = True,
+    with_verify: bool = True,
+    with_compose: bool = True,
 ) -> PipelineResult:
-    """Run stages 2-9 and return routing, claims, verdicts, and cited sources.
+    """Run stages 2–10 and return routing, claims, verdicts, and composed reply.
 
-    with_verify implies retrieval (stage 6), which implies query generation
-    (stage 5). Each claim gets a verdict (supported/refuted/insufficient) with the
-    citations that survived the audit + abstention gates (policy.md §7).
+    If `text_en` is provided (voice/image path already translated), stage 2 is
+    skipped and that English pivot is used directly.
     """
     if with_verify:
         with_retrieval = True
@@ -101,6 +124,7 @@ def process_message(
         with_queries = True
     text = (text or "").strip()
     stage_ms: dict[str, int] = {}
+    request_id = new_request_id()
 
     def timed(name, fn, *args, **kwargs):
         t0 = time.perf_counter()
@@ -108,8 +132,14 @@ def process_message(
         stage_ms[name] = round((time.perf_counter() - t0) * 1000)
         return out
 
-    # Stage 2 — translate to English (pivot language).
-    translation: Translation = timed("translate", translate_to_english, text)
+    # Stage 2 — translate to English (pivot), or reuse ASR/vision English.
+    if text_en and text_en.strip():
+        translation = translation_from_english(
+            text_en.strip(), source_language=source_language or "en"
+        )
+        stage_ms["translate"] = 0
+    else:
+        translation = timed("translate", translate_to_english, text)
 
     # Stage 3 — route.
     routing: Routing = timed(
@@ -117,14 +147,27 @@ def process_message(
     )
 
     result = PipelineResult(
-        input=text, translation=translation, routing=routing, stage_ms=stage_ms
+        input=text or translation.text_en,
+        translation=translation,
+        routing=routing,
+        stage_ms=stage_ms,
+        request_id=request_id,
     )
 
-    if routing.unintelligible:
+    if translation.unintelligible or routing.unintelligible:
         result.notice = (
             "I couldn't understand that message clearly. Please re-record or resend it, "
             f"or call the {MOM_HOTLINE}."
         )
+        if with_compose:
+            result.reply = timed(
+                "compose",
+                compose_from_result,
+                result,
+                media_kind=media_kind,
+                reply_language=reply_language,
+            )
+        trace_pipeline_result(result, request_id=request_id, media_kind=media_kind)
         return result
 
     # Scam path (stub) — runs in parallel to the policy path; both can fire.
@@ -140,13 +183,11 @@ def process_message(
             for c in raw_claims:
                 claim = ExtractedClaim(text=c.text, type=c.type)
                 if with_retrieval:
-                    # Stages 5 + 6: generate queries and retrieve matching sources.
                     rr = retrieve_for_claim(c.text)
                     claim.queries = rr.queries
                     claim.sources = rr.sources
                     claim.top_score = rr.top_score
                     if with_verify:
-                        # Stages 7-9: verdict + citation audit + abstention gates.
                         v = verify_claim(c.text, rr.chunks, rr.top_score)
                         claim.verdict = v.verdict
                         claim.reasoning = v.reasoning
@@ -169,6 +210,17 @@ def process_message(
             f"If you're unsure, call the {MOM_HOTLINE}."
         )
 
+    # Stage 10 — compose reply (policy.md §10), in the worker's language.
+    if with_compose:
+        result.reply = timed(
+            "compose",
+            compose_from_result,
+            result,
+            media_kind=media_kind,
+            reply_language=reply_language,
+        )
+
+    trace_pipeline_result(result, request_id=request_id, media_kind=media_kind)
     return result
 
 
