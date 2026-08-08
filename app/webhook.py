@@ -20,9 +20,10 @@ import tempfile
 
 import anthropic
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from pipeline import asr, contract, vision
+from pipeline import asr, contract, tts, vision
 from pipeline.pipeline import process_message
 from pipeline.translate import (
     REPLY_LANGUAGES,
@@ -307,6 +308,39 @@ async def extract(
             # the extraction pass about the language; the later judgement is better.
             "detected_language": v.language_code or result.language_code,
         }
+    )
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(description="The reply text to speak.")
+    language: str = Field(description="ISO 639-1 code of the worker's chosen language.")
+
+
+@app.post("/speak")
+def speak(req: SpeakRequest) -> Response:
+    """Speak a reply, returning OGG/Opus bytes ready to upload to WhatsApp.
+
+    Returns raw audio rather than JSON — base64 in a JSON envelope would inflate a
+    ~50 KB voice note by a third for no benefit, since the caller uploads the bytes
+    straight to Meta.
+
+    A 400 means the text or language was unusable; a 502 means synthesis failed. The
+    caller treats both the same way — send the text reply without audio — because a
+    worker waiting on an answer should not lose it because a voice couldn't be made.
+    """
+    try:
+        audio = tts.synthesize(req.text, req.language)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        # Don't echo the exception text — it can carry the reply content (policy.md §11).
+        print(f"[speak] synthesis failed for {req.language}")
+        raise HTTPException(status_code=502, detail="speech synthesis unavailable") from exc
+
+    return Response(
+        content=audio,
+        media_type="audio/ogg",
+        headers={"Content-Disposition": 'inline; filename="reply.ogg"'},
     )
 
 

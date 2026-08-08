@@ -16,3 +16,6 @@ python-multipart>=0.0.9      # file uploads to /transcribe and /extract
 
 # --- Speech to text (policy.md §1 stage 1, §2) ---
 faster-whisper>=1.1,<2       # CTranslate2 Whisper; exposes per-segment logprobs
+
+# --- Text to speech (specs.md §2: reply by voice, not text) ---
+edge-tts>=7,<8               # neural TTS, no API key; MP3 -> OGG/Opus via PyAV

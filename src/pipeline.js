@@ -336,6 +336,41 @@ export async function askContract(contractText, question, targetLanguage) {
   }
 }
 
+// Synthesis is a network round trip to the voice service plus a transcode. Kept short:
+// the text reply has already been sent, so a slow voice note is the thing to drop.
+const SPEAK_TIMEOUT_MS = Number(process.env.PIPELINE_SPEAK_TIMEOUT_MS) || 30000;
+
+/**
+ * Speak a reply, returning OGG/Opus bytes for upload to WhatsApp.
+ *
+ * Returns null on any failure. Every caller must treat that as "send the text only" —
+ * losing the voice note is a degraded reply, but losing the reply is a failed one.
+ *
+ * @param {string} text
+ * @param {string} language ISO 639-1 code the worker chose
+ * @returns {Promise<Buffer|null>}
+ */
+export async function speak(text, language) {
+  try {
+    const res = await fetch(`${PIPELINE_URL}/speak`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, language }),
+      signal: AbortSignal.timeout(SPEAK_TIMEOUT_MS),
+    });
+
+    if (!res.ok) {
+      // Don't log the body — it echoes reply content (policy.md §11).
+      console.error(`[pipeline] /speak failed: ${res.status}`);
+      return null;
+    }
+    return Buffer.from(await res.arrayBuffer());
+  } catch (err) {
+    console.error(`[pipeline] /speak unreachable: ${err.name}`);
+    return null;
+  }
+}
+
 /** True if the pipeline is up. Used at boot to warn early rather than at first message. */
 export async function isHealthy() {
   try {

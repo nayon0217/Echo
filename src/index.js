@@ -1,13 +1,13 @@
 import "dotenv/config";
 import express from "express";
-import { sendLanguageMenu, sendText } from "./whatsapp.js";
+import { sendLanguageMenu, sendText, sendReply as sendReplyWithVoice } from "./whatsapp.js";
 import {
   LANGUAGE_BY_ID,
   WELCOME_AFTER_LANGUAGE,
   CHECKING_MESSAGE,
   uiString,
 } from "./languages.js";
-import { isHealthy, PIPELINE_URL } from "./pipeline.js";
+import { isHealthy, PIPELINE_URL, speak } from "./pipeline.js";
 import { KIND, classify } from "./media.js";
 import {
   handleText,
@@ -147,17 +147,18 @@ async function handleMessage(message) {
     if (wantsToLeaveContractMode(c.text)) {
       session.contract = null;
       console.log(`[route] ${from} left contract mode`);
-      await sendText(
+      await reply(
         from,
         "Okay — I've forgotten your contract. Send me a message, voice note, or image " +
           "to check, or send the contract again any time.",
+        session.language?.code || "en",
       );
       return;
     }
 
     console.log(`[route] ${from} -> contract question`);
     const result = await handleContractQuestion(c.text, session);
-    if (result.reply) await sendText(from, result.reply);
+    if (result.reply) await reply(from, result.reply, session.language?.code || "en");
     return;
   }
 
@@ -175,7 +176,21 @@ async function handleLanguageChoice(from, session, c) {
   session.language = chosen;
   console.log(`[route] ${from} chose ${chosen.title}`);
 
-  await sendText(from, uiString(WELCOME_AFTER_LANGUAGE, chosen.code));
+  // Spoken as well as written: hearing the confirmation in their own language is the
+  // first proof the bot can actually talk to them.
+  await reply(from, uiString(WELCOME_AFTER_LANGUAGE, chosen.code), chosen.code);
+}
+
+/**
+ * Send a reply as text and as a voice note in the worker's language (specs.md §2).
+ *
+ * Every content-bearing reply goes through here. The transient "checking…"
+ * acknowledgement deliberately does not: it is superseded within seconds by the real
+ * answer, and a voice note for it would arrive as clutter just as the answer lands.
+ * Making that one audible is a one-line change if it turns out workers want it.
+ */
+function reply(to, body, code) {
+  return sendReplyWithVoice(to, body, code, speak);
 }
 
 async function runAndReply(from, c, session) {
@@ -192,7 +207,7 @@ async function runAndReply(from, c, session) {
   }
 
   if (result.reply) {
-    await sendText(from, result.reply);
+    await reply(from, result.reply, code);
   }
 }
 

@@ -65,6 +65,88 @@ export function sendText(to, body) {
   return send({ to, type: "text", text: { body } });
 }
 
+const MEDIA_API_BASE = `https://graph.facebook.com/${GRAPH_VERSION}/${PHONE_NUMBER_ID}/media`;
+
+/**
+ * Upload media to Meta and get back the id needed to send it.
+ *
+ * Outbound media is a two-step just like inbound: you cannot attach bytes to a message,
+ * only an id Meta already holds.
+ *
+ * @returns {Promise<string|null>} the media id, or null on failure
+ */
+export async function uploadMedia(buffer, mimeType, filename) {
+  try {
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", mimeType);
+    form.append("file", new Blob([buffer], { type: mimeType }), filename);
+
+    const res = await fetch(MEDIA_API_BASE, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+      body: form, // no Content-Type header — fetch sets the multipart boundary
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!res.ok) {
+      console.error(`[whatsapp] media upload failed: ${res.status}`);
+      return null;
+    }
+
+    const { id } = await res.json();
+    return id || null;
+  } catch (err) {
+    console.error(`[whatsapp] media upload error: ${err.name}`);
+    return null;
+  }
+}
+
+/**
+ * Send an already-uploaded audio clip as a voice note.
+ *
+ * WhatsApp renders audio as a voice note — waveform, inline playback — when it is
+ * OGG/Opus. Any other container arrives as a file the worker must open, which defeats
+ * the point (specs.md §2).
+ */
+export function sendVoiceNote(to, mediaId) {
+  return send({ to, type: "audio", audio: { id: mediaId } });
+}
+
+/**
+ * Send a reply as text *and* as a voice note (specs.md §2).
+ *
+ * The text goes first and its result is what's returned: the voice note is an
+ * enhancement, and every failure in synthesis or upload degrades to text-only rather
+ * than costing the worker their answer.
+ *
+ * `speakFn` is injected so the reply path doesn't import the pipeline client — it keeps
+ * this module's only dependency the Graph API, and makes the degradation testable.
+ *
+ * @param {string} to
+ * @param {string} body     the reply text
+ * @param {string} language ISO 639-1 code the worker chose
+ * @param {(text: string, language: string) => Promise<Buffer|null>} speakFn
+ */
+export async function sendReply(to, body, language, speakFn) {
+  const textResult = await sendText(to, body);
+
+  try {
+    const audio = await speakFn(body, language);
+    if (!audio || !audio.length) return textResult;
+
+    const mediaId = await uploadMedia(audio, "audio/ogg", "reply.ogg");
+    if (!mediaId) return textResult;
+
+    await sendVoiceNote(to, mediaId);
+  } catch (err) {
+    // Never let the voice path break a reply that has already been delivered.
+    console.error(`[whatsapp] voice reply failed: ${err.name}`);
+  }
+
+  return textResult;
+}
+
 /**
  * Download media (voice note, image) by its id.
  *

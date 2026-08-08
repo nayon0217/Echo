@@ -197,6 +197,50 @@ Not built yet: AI-generation detection (specs.md §5). A forged "MOM letter" tha
 cleanly is transcribed and verified without a synthetic-media flag.
 
 
+### Voice replies
+
+[`pipeline/tts.py`](./pipeline/tts.py) speaks every reply, because specs.md §2 is built
+on the premise that *"reading is the barrier"* — a text-only bot asks the worker to do
+the one thing they came here to avoid. Each content-bearing reply is sent twice: as
+text, and as a WhatsApp voice note in the language they picked.
+
+```bash
+python -m pipeline.tts "Your salary is 800 dollars a month." --language ta --out reply.ogg
+curl -X POST localhost:8000/speak -H "Content-Type: application/json" \
+  -d '{"text":"Possible scam.","language":"bn"}' --output reply.ogg
+```
+
+**Why not Puter.js.** It is a browser SDK — it ships as `<script src="https://js.puter.com/v2/">`
+and authenticates against a logged-in browser user. There is no server-side package (the
+`puter` npm entry is an unrelated 570-byte stub), so using it would mean driving a
+headless browser per reply. `edge-tts` needs no API key, no account, and no browser, and
+has neural voices for all four languages — which gTTS and macOS `say` do not cover
+between them.
+
+**Why OGG/Opus.** WhatsApp renders audio as a proper voice note — waveform, inline
+playback — only for OGG with the Opus codec. Anything else arrives as a file attachment
+the worker has to open. edge-tts returns MP3, so `tts.py` transcodes with PyAV, which
+faster-whisper already pulls in; no ffmpeg binary needed.
+
+Voices are one per language, chosen for the Singapore context rather than the largest
+speaker population — `bn-BD` (most Bengali speakers here are Bangladeshi, and the two
+accents differ audibly), `ta-IN`, `zh-CN`, `en-SG`. **These are defaults, not decisions:**
+specs.md's open checklist item — validate intelligibility with native speakers, not a
+demo — still stands.
+
+Two deliberate limits:
+
+- **Replies are capped at `MAX_CHARS` (900)** and truncated at a sentence boundary. A
+  voice note the worker has to scrub through is worse than none; the text alongside
+  always carries the whole answer.
+- **The transient "🔎 Checking your message…" acknowledgement is not spoken.** It is
+  superseded within seconds by the real answer, so a voice note for it lands as clutter
+  just as the answer arrives. One line in `index.js` if that turns out to be wrong.
+
+**Failure is always text-only, never silent.** The text is sent first, and synthesis,
+upload, and send are each best-effort after that — losing the voice note degrades a
+reply, but losing the reply fails the worker.
+
 ### Employment contracts
 
 [`pipeline/contract.py`](./pipeline/contract.py) implements specs.md §2 "Contract
@@ -358,11 +402,14 @@ What each file covers:
 - `tests/test_webhook_unit.py` — status-code mapping, the gate-1 short circuit, temp-file cleanup
 - `tests/test_vision_unit.py` — the image gate, media-type and size validation, prompt shape
 - `tests/test_contract_unit.py` — the contract usability gate, PDF vs image blocks, prompt rules
+- `tests/test_tts_unit.py` — voice selection, emoji/layout stripping, the length cap
 - `tests/routing.test.js` — boots the real Express app: onboarding, contract mode, dedupe
+- `tests/whatsapp.test.js` — media upload and the text-plus-voice reply, incl. degradation
 - `tests/test_translate_live.py` — real translation: 4 languages, detail preservation, prompt injection
 - `tests/test_voice_live.py` — real audio → Whisper → Claude, through the FastAPI route
 - `tests/test_vision_live.py` — real images → Claude vision → Claude, through the FastAPI route
 - `tests/test_contract_live.py` — real multi-page PDF → Q&A; abstention and the legal boundary
+- `tests/test_tts_live.py` — real synthesis in all four languages, decoded to verify the codec
 - `tests/media.test.js` — inbound message classification against real Meta payload shapes
 - `tests/handlers.test.js` — handlers + pipeline client + media download, with `fetch` stubbed
 
@@ -379,6 +426,7 @@ What each file covers:
 - `pipeline/llm.py` — Claude client, schema-enforced structured output
 - `pipeline/translate.py` · `router.py` · `claims.py` · `retrieve.py` · `verify.py` · `scam.py` — stages 2–9 + scam stub
 - `pipeline/contract.py` — read an employment contract + grounded Q&A (specs.md §2)
+- `pipeline/tts.py` — speak a reply as an OGG/Opus voice note (specs.md §2)
 - `pipeline/pipeline.py` — orchestrator (message → verified claims)
 - `app/webhook.py` — FastAPI service (`/transcribe`, `/extract`, `/translate`, `/process`, `/contract`, `/contract/ask`)
 - `app/api.py` — re-exports `app.webhook:app` for compatibility

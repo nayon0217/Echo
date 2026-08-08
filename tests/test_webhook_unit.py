@@ -776,6 +776,66 @@ def test_ask_upstream_failure_is_502(client, monkeypatch, exc):
     assert ask(client).status_code == 502
 
 
+def test_speak_returns_raw_audio(client, monkeypatch):
+    """Raw bytes, not base64-in-JSON — the caller uploads them straight to Meta."""
+    monkeypatch.setattr(W.tts, "synthesize", lambda text, lang: b"OggS-fake-opus")
+
+    res = client.post("/speak", json={"text": "Possible scam.", "language": "bn"})
+
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("audio/ogg")
+    assert res.content == b"OggS-fake-opus"
+
+
+def test_speak_forwards_text_and_language(client, monkeypatch):
+    seen = {}
+
+    def capture(text, language):
+        seen.update(text=text, language=language)
+        return b"audio"
+
+    monkeypatch.setattr(W.tts, "synthesize", capture)
+    client.post("/speak", json={"text": "Your salary is SGD 800.", "language": "ta"})
+
+    assert seen == {"text": "Your salary is SGD 800.", "language": "ta"}
+
+
+@pytest.mark.parametrize(
+    "detail", ["unsupported language 'fr'", "nothing to speak once formatting was stripped"]
+)
+def test_unusable_speak_input_is_400(client, monkeypatch, detail):
+    def boom(text, language):
+        raise ValueError(detail)
+
+    monkeypatch.setattr(W.tts, "synthesize", boom)
+    assert client.post("/speak", json={"text": "x", "language": "fr"}).status_code == 400
+
+
+def test_synthesis_failure_is_502(client, monkeypatch):
+    def boom(text, language):
+        raise RuntimeError("speech synthesis failed: connection reset")
+
+    monkeypatch.setattr(W.tts, "synthesize", boom)
+    assert client.post("/speak", json={"text": "hi", "language": "en"}).status_code == 502
+
+
+def test_speak_does_not_echo_the_reply_on_failure(client, monkeypatch):
+    """policy.md §11 — the reply can quote a contract clause or a passport number."""
+
+    def boom(text, language):
+        raise RuntimeError(f"failed while speaking: {text}")
+
+    monkeypatch.setattr(W.tts, "synthesize", boom)
+    res = client.post("/speak", json={"text": "Passport A1234567", "language": "en"})
+
+    assert res.status_code == 502
+    assert "A1234567" not in res.text
+
+
+def test_speak_missing_fields_is_422(client):
+    assert client.post("/speak", json={"text": "hi"}).status_code == 422
+
+
 def test_ask_does_not_echo_contract_content_on_failure(client, monkeypatch):
     """policy.md §11 — a contract holds a passport number and a salary."""
 
