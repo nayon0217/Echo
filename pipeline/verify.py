@@ -45,7 +45,14 @@ _VERDICT_SCHEMA = {
             "items": {"type": "integer"},
             "description": "IDs of the provided chunks that directly support the verdict. Must be a subset of the given IDs.",
         },
-        "reasoning": {"type": "string", "description": "Brief reasoning grounded only in the provided passages."},
+        "reasoning": {
+            "type": "string",
+            "description": (
+                "1-2 short plain-English sentences for a migrant worker: what the official "
+                "source says and why that supports, refutes, or cannot settle the claim. "
+                "Keep under 40 words. No chunk IDs, no jargon, no 'as an AI'."
+            ),
+        },
     },
     "required": ["verdict", "cited_chunk_ids", "reasoning"],
 }
@@ -57,7 +64,9 @@ _VERDICT_SYSTEM = (
     "- cited_chunk_ids must be a subset of the provided chunk IDs that directly justify your verdict.\n"
     "- CRITICAL: absence of a statement in these passages is NOT evidence the claim is false. "
     "If the passages do not clearly address the claim, return 'insufficient' with an empty cited_chunk_ids.\n"
-    "- Only return 'supported' or 'refuted' when a passage directly and unambiguously does so."
+    "- Only return 'supported' or 'refuted' when a passage directly and unambiguously does so.\n"
+    "- reasoning: 1-2 short sentences a worker can understand out loud (under 40 words). "
+    "State the key rule in plain words. Never mention chunk numbers or IDs."
 )
 
 _AUDIT_SCHEMA = {

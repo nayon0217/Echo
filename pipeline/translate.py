@@ -40,10 +40,11 @@ DEFAULT_MODEL = "claude-sonnet-5"
 # whether we can actually reply in it.
 REPLY_LANGUAGES = {
     "en": "English",
+    "id": "Indonesian (Bahasa Indonesia)",
+    "my": "Burmese",
     "bn": "Bengali",
     "ta": "Tamil",
     "zh": "Chinese (Mandarin)",
-    "id": "Indonesian",
 }
 SUPPORTED_REPLY_LANGUAGES = set(REPLY_LANGUAGES)
 

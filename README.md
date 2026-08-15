@@ -214,7 +214,7 @@ curl -X POST localhost:8000/speak -H "Content-Type: application/json" \
 and authenticates against a logged-in browser user. There is no server-side package (the
 `puter` npm entry is an unrelated 570-byte stub), so using it would mean driving a
 headless browser per reply. `edge-tts` needs no API key, no account, and no browser, and
-has neural voices for all four languages — which gTTS and macOS `say` do not cover
+has neural voices for all six languages — which gTTS and macOS `say` do not cover
 between them.
 
 **Why OGG/Opus.** WhatsApp renders audio as a proper voice note — waveform, inline
@@ -223,10 +223,10 @@ the worker has to open. edge-tts returns MP3, so `tts.py` transcodes with PyAV, 
 faster-whisper already pulls in; no ffmpeg binary needed.
 
 Voices are one per language, chosen for the Singapore context rather than the largest
-speaker population — `bn-BD` (most Bengali speakers here are Bangladeshi, and the two
-accents differ audibly), `ta-IN`, `zh-CN`, `en-SG`. **These are defaults, not decisions:**
-specs.md's open checklist item — validate intelligibility with native speakers, not a
-demo — still stands.
+speaker population — `id-ID` (Bahasa Indonesia), `my-MM` (Burmese), `bn-BD` (most
+Bengali speakers here are Bangladeshi, and the two accents differ audibly), `ta-IN`,
+`zh-CN`, `en-SG`. **These are defaults, not decisions:** specs.md's open checklist
+item — validate intelligibility with native speakers, not a demo — still stands.
 
 Two deliberate limits:
 
@@ -409,7 +409,7 @@ What each file covers:
 - `tests/test_voice_live.py` — real audio → Whisper → Claude, through the FastAPI route
 - `tests/test_vision_live.py` — real images → Claude vision → Claude, through the FastAPI route
 - `tests/test_contract_live.py` — real multi-page PDF → Q&A; abstention and the legal boundary
-- `tests/test_tts_live.py` — real synthesis in all four languages, decoded to verify the codec
+- `tests/test_tts_live.py` — real synthesis in all six languages, decoded to verify the codec
 - `tests/media.test.js` — inbound message classification against real Meta payload shapes
 - `tests/handlers.test.js` — handlers + pipeline client + media download, with `fetch` stubbed
 
@@ -420,7 +420,7 @@ What each file covers:
 - `src/handlers.js` — one handler per kind: text, voice, image, ignored → verifyText
 - `src/whatsapp.js` — WhatsApp Cloud API send helpers
 - `src/pipeline.js` — HTTP client for the Python pipeline + reply formatting
-- `src/languages.js` — the four language options
+- `src/languages.js` — the six language options
 - `pipeline/asr.py` — faster-whisper speech to text + confidence (policy.md §1 stage 1)
 - `pipeline/vision.py` — read text out of an image + confidence (stage 1, image path)
 - `pipeline/llm.py` — Claude client, schema-enforced structured output

@@ -48,13 +48,15 @@ def probe(audio: bytes) -> dict:
 
 SAMPLES = {
     "en": "Your basic salary is 800 dollars per month. Do not send money to anyone.",
+    "id": "Gaji pokok Anda adalah 800 dolar per bulan. Jangan kirim uang kepada siapa pun.",
+    "my": "သင့်အခြေခံလစာမှာ တစ်လလျှင် ၈၀၀ ဒေါ်လာ ဖြစ်သည်။ မည်သူ့ကိုမှ ပိုက်ဆံ မပို့ပါနှင့်။",
     "bn": "আপনার মূল বেতন প্রতি মাসে ৮০০ ডলার। কাউকে টাকা পাঠাবেন না।",
     "ta": "உங்கள் அடிப்படை சம்பளம் மாதம் 800 டாலர். யாருக்கும் பணம் அனுப்ப வேண்டாம்.",
     "zh": "您的基本工资是每月800新元。不要给任何人汇款。",
 }
 
 
-@pytest.mark.parametrize("code", ["en", "bn", "ta", "zh"])
+@pytest.mark.parametrize("code", ["en", "id", "my", "bn", "ta", "zh"])
 def test_speaks_every_offered_language(code):
     audio = tts.synthesize(SAMPLES[code], code)
 
@@ -69,7 +71,7 @@ def test_speaks_every_offered_language(code):
     assert info["seconds"] > 0.5, f"{code} produced only {info['seconds']:.2f}s"
 
 
-@pytest.mark.parametrize("code", ["en", "bn", "ta", "zh"])
+@pytest.mark.parametrize("code", ["en", "id", "my", "bn", "ta", "zh"])
 def test_duration_is_proportionate_to_the_text(code):
     """A clip far shorter than the text usually means the voice skipped the script."""
     audio = tts.synthesize(SAMPLES[code], code)

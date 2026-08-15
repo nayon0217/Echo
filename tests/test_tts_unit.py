@@ -18,7 +18,7 @@ from pipeline import tts
 # --------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("code", ["en", "bn", "ta", "zh"])
+@pytest.mark.parametrize("code", ["en", "id", "my", "bn", "ta", "zh"])
 def test_every_offered_language_has_a_voice(code):
     assert tts.voice_for(code)
 
@@ -36,11 +36,19 @@ def test_voices_cover_exactly_the_language_menu():
     assert not missing, f"menu offers {sorted(missing)} with no configured voice"
 
 
-@pytest.mark.parametrize("code", ["fr", "xx", "EN", "", "id"])
+@pytest.mark.parametrize("code", ["fr", "xx", "EN", "", "ms"])
 def test_unsupported_languages_are_rejected(code):
-    """'id' included deliberately: the pipeline accepts it, but the menu doesn't offer it."""
+    """Malay (ms) is not offered — workers who need it use Bahasa Indonesia (id)."""
     with pytest.raises(ValueError, match="unsupported language"):
         tts.voice_for(code)
+
+
+def test_indonesian_uses_an_id_id_voice():
+    assert tts.VOICES["id"].startswith("id-ID")
+
+
+def test_burmese_uses_a_my_mm_voice():
+    assert tts.VOICES["my"].startswith("my-MM")
 
 
 def test_bengali_uses_the_bangladeshi_voice():

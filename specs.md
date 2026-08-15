@@ -26,7 +26,7 @@ The last category is growing fastest, and it is precisely the one that existing 
 
 ## 2. The Solution
 
-A WhatsApp bot that workers forward any suspicious voice note, image, or job posting to. It replies **in the worker's own language** — English, Bengali, Tamil, Mandarin, Indonesian — with a short **voice message, not text**, walking through the same reasoning a literate fact-checker would use out loud.
+A WhatsApp bot that workers forward any suspicious voice note, image, or job posting to. It replies **in the worker's own language** — English, Bahasa Indonesia, Burmese, Bengali, Tamil, Mandarin — with a short **voice message, not text**, walking through the same reasoning a literate fact-checker would use out loud.
 
 This is the core design decision: reading is the barrier, so the entire interaction is built to never require it.
 

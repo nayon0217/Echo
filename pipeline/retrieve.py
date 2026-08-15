@@ -201,6 +201,11 @@ def retrieve(queries: list[str], *, limit: int = FINAL_LIMIT) -> RetrievalResult
     crowd out the others. Final order for the verifier is still authority_tier then
     score (tier-1 first).
     """
+    # Score scales differ: ts_rank_cd for a strong FTS hit is often ~0.01, while
+    # trigram similarity for the same chunk is ~0.2. Whichever method "wins" the
+    # per-chunk merge, gate 2 must see the best score among chunks we actually
+    # return — otherwise fuzzy overwrites make top_score collapse to a leftover
+    # weak FTS hit and we abstain on claims we already retrieved correctly.
     best: dict[int, RetrievedChunk] = {}
     for q in queries:
         for hit in _search(q):
@@ -209,8 +214,7 @@ def retrieve(queries: list[str], *, limit: int = FINAL_LIMIT) -> RetrievalResult
                 best[hit.chunk_id] = hit
 
     ranked = _select_diverse(list(best.values()), limit=limit)
-    lexical_scores = [c.score for c in ranked if c.method == "lexical"]
-    top_score = max(lexical_scores) if lexical_scores else (max((c.score for c in ranked), default=0.0))
+    top_score = max((c.score for c in ranked), default=0.0)
 
     sources: list[Source] = []
     seen_docs: set[int] = set()

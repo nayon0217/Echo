@@ -220,10 +220,7 @@ def read_contract(data: bytes, media_type: str) -> ContractRead:
         model=model_name(),
         max_tokens=16384,  # a contract is far longer than a chat screenshot
         system=READ_SYSTEM_PROMPT,
-        # Higher effort than the image path: this is a long structured document, the
-        # figures in it are the worker's pay, and it is read once rather than per turn.
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
+        # No adaptive thinking — not supported on CLAUDE_MODEL (sonnet 4.5).
         messages=[
             {
                 "role": "user",
@@ -275,8 +272,7 @@ def answer_question(contract_text: str, question: str, target_language: str) -> 
         model=model_name(),
         max_tokens=8192,
         system=system,
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
+        # No adaptive thinking — not supported on CLAUDE_MODEL (sonnet 4.5).
         messages=[{"role": "user", "content": content}],
         output_format=ContractAnswer,
     )

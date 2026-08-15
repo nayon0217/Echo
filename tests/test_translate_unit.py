@@ -61,12 +61,12 @@ def test_is_english():
     assert not translation("bn").is_english
 
 
-@pytest.mark.parametrize("code", ["en", "bn", "ta", "zh", "id"])
+@pytest.mark.parametrize("code", ["en", "id", "my", "bn", "ta", "zh"])
 def test_can_reply_in_supported_language(code):
     assert translation(code).can_reply_in_language
 
 
-@pytest.mark.parametrize("code", ["fr", "ur", "my", "und"])
+@pytest.mark.parametrize("code", ["fr", "ur", "ms", "und"])
 def test_cannot_reply_in_unsupported_language(code):
     """Detection is open — we must still report honestly that we have no voice for it."""
     assert not translation(code).can_reply_in_language

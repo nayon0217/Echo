@@ -49,11 +49,15 @@ export function sendLanguageMenu(to) {
         sections: [
           {
             title: "Languages",
-            rows: LANGUAGES.map((lang) => ({
-              id: lang.id,
-              title: lang.title,
-              description: lang.description,
-            })),
+            rows: LANGUAGES.map((lang) => {
+              const row = { id: lang.id, title: lang.title };
+              // Omit empty/duplicate descriptions so the selected bubble isn't
+              // "English English".
+              if (lang.description && lang.description !== lang.title) {
+                row.description = lang.description;
+              }
+              return row;
+            }),
           },
         ],
       },

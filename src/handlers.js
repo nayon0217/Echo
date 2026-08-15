@@ -28,6 +28,44 @@ import { HEARD_PREFIX, IMAGE_TEXT_PREFIX, uiString } from "./languages.js";
 /** Nothing to say — used for ignored media. */
 const SILENT = { reply: null, translation: null, verification: null };
 
+/** Keep complete sentences that fit `limit` words. Never append an ellipsis. */
+function fitWords(text, limit) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return trimmed;
+  const words = trimmed.split(/\s+/);
+  if (words.length <= limit) return trimmed;
+
+  const sentences = trimmed.split(/(?<=[.!?。！？။])\s+/).filter(Boolean);
+  const kept = [];
+  let count = 0;
+  for (const sentence of sentences) {
+    const n = sentence.split(/\s+/).filter(Boolean).length;
+    if (count + n > limit) break;
+    kept.push(sentence);
+    count += n;
+  }
+  return kept.length ? kept.join(" ") : sentences[0];
+}
+
+const CONTRACT_WELCOME =
+  "I've read your contract. Ask me anything about it — your salary, deductions, " +
+  "notice period, working hours.\n\n" +
+  "I'll only tell you what the contract itself says. Send \"done\" when you want " +
+  "to go back to checking messages.";
+
+/**
+ * Shared success path once a usable employment document has been transcribed.
+ * @param {{ text: string }} result
+ * @param {string} [filename]
+ */
+function acceptContract(result, filename = "") {
+  return {
+    reply: CONTRACT_WELCOME,
+    translation: null,
+    contract: { text: result.text, filename },
+  };
+}
+
 /**
  * Shared verification entry: English (or raw) text → claims → retrieve → T/F reply.
  *
@@ -56,13 +94,10 @@ export async function verifyText(text, session = {}, opts = {}) {
     });
 
     let reply = formatReply(verification, { mediaKind: opts.mediaKind || "text" });
-    // Keep the "heard" line short so the whole WhatsApp message stays readable.
+    // Keep the "heard" line as complete sentences, never mid-cut with "…".
     if (opts.heard) {
       const heard = String(opts.heard).trim();
-      const short =
-        heard.split(/\s+/).length > 40
-          ? heard.split(/\s+/).slice(0, 40).join(" ") + "…"
-          : heard;
+      const short = fitWords(heard, 40);
       const prefix = opts.heardPrefix || uiString(HEARD_PREFIX, lang || "en");
       reply = `${prefix}\n${short}\n\n${reply}`;
     }
@@ -170,7 +205,11 @@ export async function handleVoice(c, session) {
 }
 
 /**
- * Image — screenshot, job ad, "official" letter: download → vision → claims → T/F.
+ * Image — screenshot, job ad, "official" letter, or a photographed contract page.
+ *
+ * Contract photos often arrive as WhatsApp images (camera / gallery), not as
+ * document uploads. Try the contract reader first; if it is not an employment
+ * document, fall through to claim verification.
  *
  * @param {import("./media.js").Classification} c
  * @param {{language: {code: string, title: string}|null}} session
@@ -191,7 +230,25 @@ export async function handleImage(c, session) {
     });
   }
 
-  const extracted = await extractImage(media.buffer, media.mimeType || c.mimeType, target);
+  const mime = media.mimeType || c.mimeType;
+  const contractResult = await readContract(media.buffer, mime);
+  if (contractResult?.is_usable) {
+    console.log("[handler] image is an employment contract -> contract mode");
+    return acceptContract(contractResult);
+  }
+  if (contractResult?.is_contract) {
+    console.log(`[handler] contract image unusable (confidence ${contractResult.confidence})`);
+    return {
+      reply:
+        "I can see this is a contract, but I couldn't read it clearly enough to answer " +
+        "questions about it safely. Could you send a sharper copy — the PDF if you " +
+        "have it, or photos taken straight on in good light?",
+      translation: null,
+      verification: null,
+    };
+  }
+
+  const extracted = await extractImage(media.buffer, mime, target);
   if (!extracted) {
     return withCaptionFallback(c, session, {
       reply: "Sorry — I couldn't read that just now. Please try again in a moment.",
@@ -324,15 +381,7 @@ export async function handleDocument(c, session) {
     };
   }
 
-  return {
-    reply:
-      "I've read your contract. Ask me anything about it — your salary, deductions, " +
-      "notice period, working hours.\n\n" +
-      "I'll only tell you what the contract itself says. Send \"done\" when you want " +
-      "to go back to checking messages.",
-    translation: null,
-    contract: { text: result.text, filename: c.filename || "" },
-  };
+  return acceptContract(result, c.filename || "");
 }
 
 /**

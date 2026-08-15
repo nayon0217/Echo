@@ -32,10 +32,10 @@ def test_english_passes_through():
 # below is valid in both — Claude returns 'id' or 'ms' run to run. Pinning one would
 # make this flaky, so the accepted set is the assertion.
 #
-# Worth knowing: 'ms' is NOT in REPLY_LANGUAGES, so an Indonesian message labelled
-# Malay comes back with can_reply_in_language=False. Nothing branches on that today
-# (the reply language comes from the menu, not from detection), but it will matter
-# once something does.
+# Worth knowing: 'ms' (Malay) is NOT in REPLY_LANGUAGES — we offer Bahasa Indonesia
+# ('id') instead. An Indonesian message labelled Malay still comes back with
+# can_reply_in_language=False for detection, but the reply language comes from the
+# menu, not from detection.
 ACCEPTED = {
     "indonesian": {"id", "ms"},
     "bengali": {"bn"},

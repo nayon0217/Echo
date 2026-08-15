@@ -398,6 +398,19 @@ const extracted = (overrides = {}) => ({
 });
 
 describe("images", () => {
+  // Photos try /contract first (contract pages often arrive as WhatsApp images).
+  beforeEach(() => {
+    routes.set("/contract", () =>
+      json({
+        is_contract: false,
+        is_usable: false,
+        confidence: 0.95,
+        language_code: "en",
+        text: "",
+      }),
+    );
+  });
+
   test("downloads, reads, verifies, and replies with a T/F verdict", async () => {
     mockMediaDownload("IMG1", { mimeType: "image/jpeg" });
     routes.set("/extract", () => json(extracted()));
@@ -428,6 +441,33 @@ describe("images", () => {
     assert.match(result.reply, /couldn.t confirm|can.t confirm|True|False/i);
     assert.equal(result.translation.detected_language, "id");
     assert.equal(result.verification.claims[0].verdict, "insufficient");
+  });
+
+  test("a photographed employment contract enters contract mode, not verification", async () => {
+    mockMediaDownload("IMG1", { mimeType: "image/jpeg" });
+    routes.set("/contract", () =>
+      json(
+        contractRead({
+          text:
+            "STANDARD EMPLOYMENT CONTRACT BETWEEN FOREIGN DOMESTIC WORKER AND EMPLOYER\n" +
+            "Basic salary: SGD 650",
+        }),
+      ),
+    );
+    let hitExtract = false;
+    routes.set("/extract", () => {
+      hitExtract = true;
+      return json(extracted());
+    });
+
+    const result = await handleImage(imageMessage(), {
+      language: { code: "en", title: "English" },
+    });
+
+    assert.equal(hitExtract, false, "usable contracts must not fall through to /extract");
+    assert.match(result.reply, /I've read your contract/i);
+    assert.match(result.contract.text, /FOREIGN DOMESTIC WORKER/i);
+    assert.equal(result.verification, undefined);
   });
 
   test("uploads the image bytes and chosen language as multipart", async () => {

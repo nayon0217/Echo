@@ -10,7 +10,7 @@ avoid.
 `<script src="https://js.puter.com/v2/">` and authenticates against a logged-in browser
 user. There is no server-side package (the `puter` npm entry is an unrelated 570-byte
 stub), so using it here would mean driving a headless browser per reply. edge-tts needs
-no API key, no account, and no browser, and has neural voices for all four languages
+no API key, no account, and no browser, and has neural voices for all six languages
 ECHO offers — which gTTS and macOS `say` do not cover between them.
 
 **Why OGG/Opus.** WhatsApp renders an audio message as a proper voice note — waveform,
@@ -36,6 +36,8 @@ from av.audio.resampler import AudioResampler
 # One voice per language ECHO offers (mirrors src/languages.js), chosen for the
 # Singapore migrant-worker context rather than the largest speaker population:
 #
+#   id-ID  Bahasa Indonesia — common among Indonesian domestic and construction workers.
+#   my-MM  Burmese (Myanmar) — common among Myanmar domestic and construction workers.
 #   bn-BD  Bangladeshi Bengali — most Bengali-speaking workers here are from Bangladesh,
 #          not West Bengal, and the two differ audibly.
 #   ta-IN  Indian Tamil. ta-MY (Malaysian) is the nearer accent but a smaller voice set.
@@ -45,6 +47,8 @@ from av.audio.resampler import AudioResampler
 # not picked from a list. Treat them as defaults, not decisions.
 VOICES = {
     "en": "en-SG-LunaNeural",
+    "id": "id-ID-GadisNeural",
+    "my": "my-MM-NilarNeural",
     "bn": "bn-BD-NabanitaNeural",
     "ta": "ta-IN-PallaviNeural",
     "zh": "zh-CN-XiaoxiaoNeural",

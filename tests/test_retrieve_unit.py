@@ -1,9 +1,16 @@
 """Unit tests for multi-family retrieval diversification."""
 
-from pipeline.retrieve import RetrievedChunk, _select_diverse, _source_family
+from pipeline.retrieve import RetrievedChunk, _select_diverse, _source_family, retrieve
 
 
-def _chunk(chunk_id: int, source_name: str, tier: int, score: float) -> RetrievedChunk:
+def _chunk(
+    chunk_id: int,
+    source_name: str,
+    tier: int,
+    score: float,
+    *,
+    method: str = "lexical",
+) -> RetrievedChunk:
     return RetrievedChunk(
         chunk_id=chunk_id,
         document_id=chunk_id,
@@ -14,7 +21,7 @@ def _chunk(chunk_id: int, source_name: str, tier: int, score: float) -> Retrieve
         heading=None,
         content="sample",
         score=score,
-        method="lexical",
+        method=method,
     )
 
 
@@ -39,3 +46,19 @@ def test_select_diverse_keeps_all_four_families():
     picked = _select_diverse(chunks, limit=10)
     families = {_source_family(c.source_name) for c in picked}
     assert families >= {"mom", "gov_other", "ngo", "news"}
+
+
+def test_top_score_uses_best_ranked_even_when_fuzzy_overwrites(monkeypatch):
+    """Fuzzy similarity often beats ts_rank numerically; gate 2 must see that score."""
+
+    def fake_search(_query: str):
+        return [
+            _chunk(1, "MOM", 1, 0.05, method="lexical"),
+            _chunk(1, "MOM", 1, 0.27, method="fuzzy"),  # same chunk, higher fuzzy
+            _chunk(2, "MOM", 1, 0.002, method="lexical"),
+        ]
+
+    monkeypatch.setattr("pipeline.retrieve._search", fake_search)
+    result = retrieve(["salary payment"])
+    assert result.top_score == 0.27
+    assert result.chunks[0].score == 0.27

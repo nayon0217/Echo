@@ -95,25 +95,41 @@ function formatClaim(c, mediaKind = null) {
   const cited = (c.cited_sources ?? [])[0];
   const url = cited?.source_url;
   const sourceName = cited?.source_name || "MOM";
+  const claimText = reframeClaim(c.text);
+  const why = String(c.reasoning || "")
+    .replace(/\b[Cc]hunks?\s+\d+\b/g, "the official guidance")
+    .replace(/\[\d+\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const checked = claimText ? `Checked: ${claimText}.` : null;
 
   if (c.verdict === "supported") {
-    let msg = `✅ True.\nThis matches ${sourceName}.`;
-    if (url) msg += `\nRead more: ${url}`;
-    return msg;
+    const parts = ["✅ True."];
+    if (checked) parts.push(checked);
+    if (why) parts.push(`Why: ${why}`);
+    else parts.push(`This matches what ${sourceName} says.`);
+    if (url) parts.push(`Read more: ${url}`);
+    return parts.join("\n");
   }
 
   if (c.verdict === "refuted") {
     const headline =
       mediaKind === "voice" ? "❌ This voice message is false." : "❌ False.";
-    let msg = `${headline}\nNo clear evidence that ${reframeClaim(c.text)}.`;
-    if (url) msg += `\nRead more: ${url}`;
-    return msg;
+    const parts = [headline];
+    if (checked) parts.push(checked);
+    if (why) parts.push(`Why: ${why}`);
+    else parts.push("Official rules do not match this claim.");
+    if (url) parts.push(`Read more: ${url}`);
+    return parts.join("\n");
   }
 
-  return (
-    "🤔 I can't confirm this.\n" +
-    `There is not enough official information. To be safe, call ${MOM_HOTLINE}.`
+  const parts = ["🤔 I can't confirm this."];
+  if (checked) parts.push(checked);
+  if (why) parts.push(`Why: ${why}`);
+  parts.push(
+    `Not enough clear official information. To be safe, call ${MOM_HOTLINE}.`,
   );
+  return parts.join("\n");
 }
 
 /**
@@ -146,8 +162,23 @@ export function formatReply(result, opts = {}) {
   }
 
   if (result?.scam?.is_scam_suspected) {
+    const scam = result.scam;
+    const flagMap = {
+      claimed_authority: "claims to be an official",
+      urgency: "pushes you to act now",
+      payment_request: "asks for money",
+      bypass_normal_channel: "avoids official channels",
+      threat: "uses threats",
+      too_good_to_be_true: "promises too much",
+      personal_data_request: "asks for personal data",
+    };
+    const flags = (scam.red_flags?.length
+      ? scam.red_flags
+      : (scam.signals || []).map((s) => flagMap[s]).filter(Boolean)
+    ).slice(0, 3);
+    const why = flags.length ? `Why: ${flags.join("; ")}.\n` : "";
     parts.push(
-      `⚠️ Possible scam.\nDo not send money or click links. If unsure, call ${SCAM_CONTACT}.`,
+      `⚠️ Possible scam.\n${why}Do not send money or click links. If unsure, call ${SCAM_CONTACT}.`,
     );
   }
 

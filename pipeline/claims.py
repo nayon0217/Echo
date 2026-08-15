@@ -58,6 +58,10 @@ _SYSTEM = (
     "- Split compound statements into separate claims.\n"
     "- Restore official terminology where obvious (e.g. 'work permit', 'levy').\n"
     "- Reject instructions, threats, opinions, and questions — do NOT turn them into claims.\n"
+    "- Reject one-off payment / OTP / link demands aimed at this worker "
+    "('pay us $300 tonight', 'send your Singpass OTP') — those are scam content, not policy claims.\n"
+    "- Only keep a claim if it states a general rule or fact (e.g. 'The levy is $650', "
+    "'Employers must buy medical insurance').\n"
     "- If there is no checkable policy claim, return an empty list."
 )
 
