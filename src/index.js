@@ -5,10 +5,12 @@ import {
   LANGUAGE_BY_ID,
   WELCOME_AFTER_LANGUAGE,
   CHECKING_MESSAGE,
+  SEND_CONTRACT_PROMPT,
   uiString,
 } from "./languages.js";
 import { isHealthy, PIPELINE_URL, speak } from "./pipeline.js";
 import { KIND, classify } from "./media.js";
+import { isContractQuestion } from "./contractQuestion.js";
 import {
   handleText,
   handleImage,
@@ -47,7 +49,12 @@ function sessionFor(from) {
     // the single most sensitive thing this process keeps. It lives here and nowhere
     // else — never on disk, never in Postgres — and dies with the process, which is
     // what lets policy.md §11 ("no personal data retention") stand unamended.
-    s = { language: null, lastMessage: null, contract: null };
+    s = {
+      language: null,
+      lastMessage: null,
+      contract: null,
+      pendingContractQuestion: null,
+    };
     sessions.set(from, s);
   }
   return s;
@@ -137,6 +144,8 @@ async function handleMessage(message) {
     return;
   }
 
+  const code = session.language?.code || "en";
+
   // Holding a contract puts the sender in contract mode: their typed messages are
   // questions about that document, not new claims to verify. Deterministic — no
   // per-message classifier call, and they leave with one word.
@@ -146,20 +155,43 @@ async function handleMessage(message) {
   if (session.contract && c.kind === KIND.TEXT) {
     if (wantsToLeaveContractMode(c.text)) {
       session.contract = null;
+      session.pendingContractQuestion = null;
       console.log(`[route] ${from} left contract mode`);
       await reply(
         from,
         "Okay — I've forgotten your contract. Send me a message, voice note, or image " +
           "to check, or send the contract again any time.",
-        session.language?.code || "en",
+        code,
       );
       return;
     }
 
     console.log(`[route] ${from} -> contract question`);
     const result = await handleContractQuestion(c.text, session);
-    if (result.reply) await reply(from, result.reply, session.language?.code || "en");
+    if (result.reply) await reply(from, result.reply, code);
     return;
+  }
+
+  // No contract held yet — if this is a question about their employment document,
+  // ask them to send it, remember the question, and answer after the upload.
+  if (!session.contract && c.kind === KIND.TEXT) {
+    if (wantsToLeaveContractMode(c.text) && session.pendingContractQuestion) {
+      session.pendingContractQuestion = null;
+      await reply(
+        from,
+        "Okay — send me a voice note, image, or message to check, or send a contract " +
+          "any time you want me to read one.",
+        code,
+      );
+      return;
+    }
+
+    if (isContractQuestion(c.text)) {
+      session.pendingContractQuestion = c.text;
+      console.log(`[route] ${from} asked a contract question with no document -> prompt upload`);
+      await reply(from, uiString(SEND_CONTRACT_PROMPT, code), code);
+      return;
+    }
   }
 
   await runAndReply(from, c, session);
@@ -204,6 +236,21 @@ async function runAndReply(from, c, session) {
   if (result.contract) {
     session.contract = result.contract;
     console.log(`[route] ${from} entered contract mode`);
+
+    const pending = session.pendingContractQuestion;
+    if (pending) {
+      session.pendingContractQuestion = null;
+      console.log(`[route] ${from} answering held contract question`);
+      const asked = await handleContractQuestion(pending, session);
+      if (asked.reply) {
+        await reply(
+          from,
+          `${asked.reply}\n\nI'll keep this contract for more questions. Send "done" when you want to go back.`,
+          code,
+        );
+        return;
+      }
+    }
   }
 
   if (result.reply) {

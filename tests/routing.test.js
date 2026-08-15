@@ -428,8 +428,142 @@ describe("contract mode", () => {
     });
     routes.set("/process", () => json({ reply: "bob's message went to verification" }));
 
-    await deliver(bob, textMsg("how much do I earn?"));
+    await deliver(bob, textMsg("is the levy going up?"));
     await waitFor(() => sent.some((m) => /went to verification/.test(JSON.stringify(m))));
+  });
+
+  test("a contract question with no document asks for the contract, not policy check", async () => {
+    const phone = newPhone();
+    await onboard(phone);
+
+    let processed = false;
+    routes.set("/process", () => {
+      processed = true;
+      return json({ reply: "should not verify" });
+    });
+
+    await deliver(phone, textMsg("how much is my salary?"));
+    await waitFor(() =>
+      sent.some((m) => /question about your employment contract/i.test(JSON.stringify(m))),
+    );
+    assert.equal(processed, false, "must not run the policy path");
+  });
+
+  test("after the prompt, the uploaded contract answers the held question and later ones", async () => {
+    const phone = newPhone();
+    await onboard(phone);
+
+    await deliver(phone, textMsg("how much is my salary?"));
+    await waitFor(() =>
+      sent.some((m) => /question about your employment contract/i.test(JSON.stringify(m))),
+    );
+
+    mockMedia();
+    routes.set("/contract", contractOk);
+
+    let askedWith = null;
+    let askCount = 0;
+    routes.set("/contract/ask", (_url, init) => {
+      askedWith = JSON.parse(init.body);
+      askCount += 1;
+      return json({
+        answerable: true,
+        answer_en: "Your basic salary is SGD 800 per month.",
+        answer_target: "Your basic salary is SGD 800 per month.",
+        quote: "Basic salary: SGD 800 per month.",
+        needs_legal_check: false,
+      });
+    });
+
+    await deliver(phone, docMsg());
+    await waitFor(() => sent.some((m) => /SGD 800/.test(JSON.stringify(m))));
+    assert.ok(askedWith, "the held question must be asked against the uploaded contract");
+    assert.match(askedWith.question, /salary/i);
+    assert.match(JSON.stringify(sent.at(-1)), /keep this contract/i);
+
+    const before = sent.length;
+    await deliver(phone, textMsg("what notice must I give?"));
+    await waitFor(() => sent.length > before);
+    assert.equal(askCount, 2, "follow-up questions must use the held contract");
+  });
+
+  test("salary question then passport follow-up after the contract is sent", async () => {
+    const phone = newPhone();
+    await onboard(phone);
+
+    const salaryQ = "What is my salary, according to my contract?";
+    const passportQ = "What does the passport section say?";
+    const contractText =
+      "1. Basic salary: SGD 800 per month.\n" +
+      "2. Passport: The Employer shall keep the Worker's passport for safekeeping.";
+
+    let processed = false;
+    routes.set("/process", () => {
+      processed = true;
+      return json({ reply: "policy path must not run" });
+    });
+
+    await deliver(phone, textMsg(salaryQ));
+    await waitFor(() =>
+      sent.some((m) => /Please send the contract/i.test(JSON.stringify(m))),
+    );
+    assert.equal(processed, false, "step 2: prompt for the contract, do not fact-check MOM");
+
+    mockMedia();
+    routes.set("/contract", () =>
+      json({
+        is_contract: true,
+        is_usable: true,
+        confidence: 0.94,
+        language_code: "en",
+        text: contractText,
+      }),
+    );
+
+    const questions = [];
+    routes.set("/contract/ask", (_url, init) => {
+      const body = JSON.parse(init.body);
+      questions.push(body.question);
+      assert.match(body.contract_text, /Basic salary: SGD 800/);
+      assert.match(body.contract_text, /Passport/);
+
+      if (/salary/i.test(body.question)) {
+        return json({
+          answerable: true,
+          answer_en: "Your basic salary is SGD 800 per month.",
+          answer_target: "Your basic salary is SGD 800 per month.",
+          quote: "Basic salary: SGD 800 per month.",
+          needs_legal_check: false,
+        });
+      }
+      return json({
+        answerable: true,
+        answer_en: "The employer keeps the worker's passport for safekeeping.",
+        answer_target: "The employer keeps the worker's passport for safekeeping.",
+        quote: "The Employer shall keep the Worker's passport for safekeeping.",
+        needs_legal_check: false,
+      });
+    });
+
+    await deliver(phone, docMsg());
+    await waitFor(() =>
+      sent.some((m) => /Your basic salary is SGD 800/.test(JSON.stringify(m))),
+    );
+    assert.deepEqual(questions, [salaryQ], "step 4: answer the original salary question");
+    assert.match(
+      JSON.stringify(sent.at(-1)),
+      /keep this contract/i,
+      "the contract stays held for follow-ups",
+    );
+
+    const before = sent.length;
+    await deliver(phone, textMsg(passportQ));
+    await waitFor(() =>
+      sent.some((m) => /passport for safekeeping/i.test(JSON.stringify(m))),
+    );
+    assert.equal(sent.length > before, true);
+    assert.deepEqual(questions, [salaryQ, passportQ], "step 6: passport question uses the same contract");
+    assert.equal(processed, false);
   });
 });
 

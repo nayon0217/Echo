@@ -231,21 +231,27 @@ export async function handleImage(c, session) {
   }
 
   const mime = media.mimeType || c.mimeType;
-  const contractResult = await readContract(media.buffer, mime);
-  if (contractResult?.is_usable) {
-    console.log("[handler] image is an employment contract -> contract mode");
-    return acceptContract(contractResult);
-  }
-  if (contractResult?.is_contract) {
-    console.log(`[handler] contract image unusable (confidence ${contractResult.confidence})`);
-    return {
-      reply:
-        "I can see this is a contract, but I couldn't read it clearly enough to answer " +
-        "questions about it safely. Could you send a sharper copy — the PDF if you " +
-        "have it, or photos taken straight on in good light?",
-      translation: null,
-      verification: null,
-    };
+
+  // If we already hold a contract, a new image is content to fact-check — don't
+  // replace the held document. If we're waiting for an upload, do try the reader.
+  const waitingForContract = Boolean(session?.pendingContractQuestion) && !session?.contract;
+  if (!session?.contract || waitingForContract) {
+    const contractResult = await readContract(media.buffer, mime);
+    if (contractResult?.is_usable) {
+      console.log("[handler] image is an employment contract -> contract mode");
+      return acceptContract(contractResult);
+    }
+    if (contractResult?.is_contract) {
+      console.log(`[handler] contract image unusable (confidence ${contractResult.confidence})`);
+      return {
+        reply:
+          "I can see this is a contract, but I couldn't read it clearly enough to answer " +
+          "questions about it safely. Could you send a sharper copy — the PDF if you " +
+          "have it, or photos taken straight on in good light?",
+        translation: null,
+        verification: null,
+      };
+    }
   }
 
   const extracted = await extractImage(media.buffer, mime, target);

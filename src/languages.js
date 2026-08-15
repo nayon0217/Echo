@@ -56,6 +56,16 @@ export const IMAGE_TEXT_PREFIX = {
   zh: "图片文字：",
 };
 
+/** Ask the worker to send their contract so a held question can be answered. */
+export const SEND_CONTRACT_PROMPT = {
+  en: "That looks like a question about your employment contract.\n\nPlease send the contract (the PDF, or photos of the pages). I will answer from the document, then keep it so you can ask more questions.\n\nSend \"done\" if you want to check something else instead.",
+  id: "Itu sepertinya pertanyaan tentang kontrak kerja Anda.\n\nKirim kontraknya (PDF atau foto halamannya). Saya akan menjawab dari dokumen itu, lalu menyimpannya agar Anda bisa bertanya lagi.\n\nKirim \"done\" jika Anda ingin memeriksa hal lain.",
+  my: "၎င်းသည် သင့်အလုပ်စာချုပ်အကြောင်း မေးခွန်းတစ်ခု ဖြစ်ပုံရသည်။\n\nစာချုပ်ကို ပို့ပေးပါ (PDF သို့မဟုတ် စာမျက်နှာပုံများ)။ စာရွက်မှ ဖြေပြီး နောက်ထပ်မေးခွန်းများအတွက် သိမ်းထားပါမည်။\n\nအခြားအရာ စစ်ဆေးလိုလျှင် \"done\" ဟု ပို့ပါ။",
+  bn: "এটা আপনার চাকরির চুক্তি সম্পর্কে একটি প্রশ্ন বলে মনে হচ্ছে।\n\nচুক্তিটা পাঠান (পিডিএফ বা পাতার ছবি)। আমি নথি থেকে উত্তর দেব, তারপর আরও প্রশ্নের জন্য রাখব।\n\nঅন্য কিছু যাচাই করতে চাইলে \"done\" পাঠান।",
+  ta: "இது உங்கள் வேலை ஒப்பந்தம் பற்றிய கேள்வி போல் தெரிகிறது.\n\nஒப்பந்தத்தை அனுப்புங்கள் (PDF அல்லது பக்கப் படங்கள்). ஆவணத்திலிருந்து பதில் சொல்லி, மேலும் கேள்விகளுக்காக வைத்திருப்பேன்.\n\nவேறு ஒன்றை சரிபார்க்க \"done\" என்று அனுப்புங்கள்.",
+  zh: "这看起来是关于您劳动合同的问题。\n\n请发送合同（PDF或各页照片）。我会根据文件回答，并保留它以便您继续提问。\n\n若要查证其他内容，请发送 \"done\"。",
+};
+
 export function uiString(map, code) {
   return map[code] || map.en;
 }
