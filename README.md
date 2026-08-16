@@ -38,16 +38,14 @@ pip install -r requirements.txt
 
 **3. `.env`**
 
-| Variable | Purpose |
-|---|---|
-| `number_ID`, `access_token` | WhatsApp Cloud API |
-| `VERIFY_TOKEN` | Must match the Meta webhook verify token |
-| `PORT` | Bot port (default `3000`) |
-| `PIPELINE_URL` | Pipeline (default `http://127.0.0.1:8000`) |
-| `CLAUDE_API_KEY`, `CLAUDE_MODEL` | Anthropic |
-| `POSTGRES_*` or `DATABASE_URL` | Corpus DB (defaults `echo` / `echo` / `echo`) |
+```bash
+cp .env.example .env
+```
 
-Optional: `WHISPER_MODEL` (`large-v3` by default, ~3 GB; use `base` while iterating).
+Fill in `number_ID`, `access_token`, and `CLAUDE_API_KEY`. Other defaults match
+local Docker Postgres and `PIPELINE_URL=http://127.0.0.1:8000`. `VERIFY_TOKEN`
+must match the Meta webhook. Set `WHISPER_MODEL=base` while iterating (default
+is `large-v3`, ~3 GB).
 
 **4. Run (four terminals)**
 
