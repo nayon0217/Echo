@@ -4,4 +4,4 @@ node_modules
 __pycache__/
 *.pyc
 logs/
-.eval_cache/
+.eval_cache/.DS_Store

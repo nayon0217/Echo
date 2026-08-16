@@ -1,16 +1,17 @@
 # ECHO — WhatsApp Bot
 
-Voice-first AI verification bot for migrant workers in Singapore. See [`specs.md`](./specs.md) for the full project vision.
+Voice-first AI verification bot for migrant workers in Singapore. See [`specs.md`](./specs.md) for the project vision and [`policy.md`](./policy.md) for the verification pipeline.
 
-**Current step:** a worker forwards a text message, voice note, or image in any
-language; the bot reads it, detects the language, and replies in the language they
-picked from the menu. They can also send their employment contract and ask questions
-about it. Verification of claims against official sources is not built yet.
+A worker picks a reply language, then forwards a text, voice note, or image. The bot
+translates it, checks claims against official Singapore sources (MOM / CPF / IRAS,
+TWC2 / MWC, CNA / ST), and replies in that language as **text plus a voice note**.
+Scam-looking messages get a short warning. They can also send their employment
+contract and ask questions about *that document*.
 
 ## Stack
 
 - Node.js 22 + Express — WhatsApp messaging layer (`src/`)
-- Python 3.11+ — verification pipeline (`db/`, `pipeline/`, `ingest/`, `eval/`); see [`policy.md`](./policy.md)
+- Python 3.10+ — verification pipeline (`db/`, `pipeline/`, `ingest/`, `eval/`); see [`policy.md`](./policy.md)
 - Postgres 16 + `pg_trgm` — the fact-checking corpus (FTS + trigram retrieval)
 - WhatsApp Cloud API (Meta-hosted)
 
@@ -66,36 +67,64 @@ python -m ingest.fetch --limit 3 --dry-run  # quick smoke test
 Re-running upserts (replaces a document's chunks in place) rather than
 duplicating, so editing `sources.yaml` and re-running is safe.
 
-Current corpus: **73 documents, ~666 chunks** across tiers 1–3 (MOM/CPF/IRAS,
-TWC2/MWC, CNA/ST). Tier-1 SPF ScamAlert is still deferred (see the note in
-`sources.yaml`).
+Current corpus: **73 documents** across tiers 1–3 (MOM/CPF/IRAS, TWC2/MWC,
+CNA/ST). Tier-1 SPF ScamAlert is still deferred (see the note in `sources.yaml`).
+Retrieval diversifies hits across those source families so CPF/IRAS and NGO/news
+are not crowded out by MOM.
+
+## Languages
+
+The first message from a new sender is a WhatsApp **list** of reply languages
+(the Cloud API allows at most 3 reply buttons, so six options use a list):
+
+English, Bahasa Indonesia, Burmese, Bengali, Tamil, Mandarin.
+
+The reply language is asked for rather than inferred on purpose. A forwarded
+scam is often written in English regardless of what the worker actually reads,
+so answering in the *detected* language would reply in English to someone who
+can't read it. Detected language and reply language are separate: the first is
+what we translate from, the second is what we answer in.
+
+Until a sender picks a language, any content message gets the menu instead.
+After they choose, ECHO sends a short welcome — verification starts on the
+*next* message they send. Ignored media never triggers the menu.
 
 ## Message routing
 
 Every inbound message is classified by [`src/media.js`](./src/media.js) and dispatched
-to a handler in [`src/handlers.js`](./src/handlers.js):
+from [`src/index.js`](./src/index.js) to a handler in [`src/handlers.js`](./src/handlers.js).
 
 | WhatsApp type | Kind | What happens |
 |---|---|---|
-| `text` | text | Translate → claim extraction → DB retrieve → LLM true/false |
-| `image` | image | Claude vision → same verification path as text |
+| `text` | text | If it looks like a question about *their* contract (see below), prompt for the file. Otherwise translate → route → claims → DB retrieve → LLM true/false |
+| `image` | image | Claude vision. While waiting for a contract upload, try the contract reader first; otherwise (or if it is not a contract) verify like text. A new image **while a contract is already held** is fact-checked, not treated as a replacement document |
 | `audio` | voice | Whisper ASR → translate → same verification path. `audio.voice` marks an in-app recording |
+| `document` | document | Employment contract PDF (or similar). Read once, hold in memory, answer any pending question |
 | `interactive`, `button` | control | Language selection |
 | everything else | unsupported | Logged and ignored, no reply |
 
-All three content kinds converge on `verifyText()` after they have English text, so
-voice and image inherit claim extraction and verification automatically.
+Forwarded voice notes still go through verification even in contract mode, so the
+worker can check a suspicious message without losing the held document.
 
-**First contact is gated behind the language menu.** Until a sender picks a reply
-language, any content message gets the menu instead. After they choose, ECHO only
-sends a short welcome — verification starts on the *next* message they send.
-Ignored media never triggers the menu.
+### Contract questions vs policy claims
 
-The reply language is asked for rather than inferred on purpose. A forwarded scam is
-often written in English regardless of what the worker actually reads, so answering in
-the *detected* language would reply in English to someone who can't read it. Detected
-language and reply language are separate: the first is what we translate from, the
-second is what we answer in.
+[`src/contractQuestion.js`](./src/contractQuestion.js) separates “what does *my*
+contract say?” from MOM policy rumours. Hints include `contract`, `my salary`,
+notice period, deductions, hours, leave. Levy / ScamShield rumours stay on the
+policy path.
+
+Flow when no document is held yet:
+
+1. Typed contract-like question → remember it as `pendingContractQuestion` and
+   ask them to send the PDF or page photos (`SEND_CONTRACT_PROMPT`).
+2. Usable upload → hold the text in the in-memory session, answer the held
+   question, then keep the document for follow-ups.
+3. Later typed messages are `/contract/ask` against **that same text** until
+   they send `done` (or `exit`, `stop`, `back`, `cancel`, `finish`).
+4. Restarting `npm start` clears the session; they must send the contract again.
+
+Send `done` while waiting for an upload to drop the pending question without
+entering contract mode.
 
 ## Verification pipeline (Python)
 
@@ -108,20 +137,21 @@ output — no free-text parsing.
 | 2 translate | `pipeline/translate.py` | detect language, translate to English (retrieval pivot) |
 | 3 route | `pipeline/router.py` | multi-label: policy claim? scam signals? neither? |
 | 4 claims | `pipeline/claims.py` | atomic, independently checkable assertions |
-| 5–6 retrieve | `pipeline/retrieve.py` | FTS query gen + Postgres FTS/trigram |
+| 5–6 retrieve | `pipeline/retrieve.py` | FTS query gen + Postgres FTS/trigram, diversified across source families |
 | 7–9 verify | `pipeline/verify.py` | LLM verdict + citation audit + abstention gates |
-| 10 compose | `pipeline/compose.py` | reasoning narrative reply (not a bare label) |
-| — | `pipeline/scam.py` | scam-path stub (warning + hotline) |
+| 10 compose | `pipeline/compose.py` | reasoning narrative in easy English, then localise; ≤75 words, **complete sentences** (never chopped with “…”) |
+| — | `pipeline/scam.py` | scam-path stub (warning + MOM / ScamShield hotlines + “Why:” flags) |
 | — | `pipeline/pipeline.py` | orchestrator (`process_message`) |
 | — | `pipeline/trace.py` | JSONL timings/verdicts (never transcripts) |
 | — | `eval/golden.csv`, `eval/run_eval.py` | golden set + recall@8 / confusion matrix |
 
-`app/webhook.py` exposes `/transcribe`, `/extract`, `/translate`, and `/process` so the
-Node layer can call the full stack on one port (`PIPELINE_URL`).
+[`app/webhook.py`](./app/webhook.py) exposes `/health`, `/transcribe`, `/extract`,
+`/translate`, `/process`, `/speak`, `/contract`, and `/contract/ask` so the Node
+layer can call the full stack on one port (`PIPELINE_URL`).
 
 ```bash
 source .venv/bin/activate
-uvicorn app.webhook:app --reload --port 8000
+uvicorn app.webhook:app --reload --host 127.0.0.1 --port 8000
 ```
 
 The port must match `PIPELINE_URL` in `.env`. Bind to localhost only — this process
@@ -142,7 +172,9 @@ curl -X POST localhost:8000/process \
   -d '{"text":"MOM raised the work permit levy to $900 in 2026"}'
 ```
 
-The model is set by `CLAUDE_MODEL` in `.env` and the key by `CLAUDE_API_KEY`.
+The model is set by `CLAUDE_MODEL` in `.env` and the key by `CLAUDE_API_KEY`
+(or `ANTHROPIC_API_KEY`). Adaptive thinking is not used — Claude Sonnet 4.5
+rejects it with HTTP 400.
 
 ### Voice notes
 
@@ -196,13 +228,12 @@ used instead.
 Not built yet: AI-generation detection (specs.md §5). A forged "MOM letter" that reads
 cleanly is transcribed and verified without a synthetic-media flag.
 
-
 ### Voice replies
 
-[`pipeline/tts.py`](./pipeline/tts.py) speaks every reply, because specs.md §2 is built
-on the premise that *"reading is the barrier"* — a text-only bot asks the worker to do
-the one thing they came here to avoid. Each content-bearing reply is sent twice: as
-text, and as a WhatsApp voice note in the language they picked.
+[`pipeline/tts.py`](./pipeline/tts.py) speaks every content-bearing reply, because
+specs.md §2 is built on the premise that *"reading is the barrier"* — a text-only bot
+asks the worker to do the one thing they came here to avoid. Each reply is sent
+twice: as text, and as a WhatsApp voice note in the language they picked.
 
 ```bash
 python -m pipeline.tts "Your salary is 800 dollars a month." --language ta --out reply.ogg
@@ -230,12 +261,12 @@ item — validate intelligibility with native speakers, not a demo — still sta
 
 Two deliberate limits:
 
-- **Replies are capped at `MAX_CHARS` (900)** and truncated at a sentence boundary. A
-  voice note the worker has to scrub through is worse than none; the text alongside
-  always carries the whole answer.
+- **Compose caps replies at `MAX_WORDS` (75)** and keeps whole sentences (no “…”)
+  so they speak cleanly. TTS has a second cap of `MAX_CHARS` (900), truncated at a
+  sentence boundary. The text alongside always carries the whole answer.
 - **The transient "🔎 Checking your message…" acknowledgement is not spoken.** It is
   superseded within seconds by the real answer, so a voice note for it lands as clutter
-  just as the answer arrives. One line in `index.js` if that turns out to be wrong.
+  just as the answer arrives.
 
 **Failure is always text-only, never silent.** The text is sent first, and synthesis,
 upload, and send are each best-effort after that — losing the voice note degrades a
@@ -276,37 +307,38 @@ re-uploads.
   plausible invention about someone's pay is worse than "your contract doesn't say",
   because they have no way to check it. Answerable questions come back with a verbatim
   `quote` of the clause, so the answer can be held against the page.
-- **It will not say whether a term is legal.** That needs the MOM corpus and the
-  retrieval stages (policy.md §1 stages 6-8), which aren't built. Legality questions
-  set `needs_legal_check` and the bot points to the MOM helpline instead of guessing.
-  `specs.md`'s "what limits apply" is blocked on the corpus, not on this module.
+- **It will not say whether a term is legal.** That would mix the worker's personal
+  document into the MOM corpus path. Legality questions set `needs_legal_check` and
+  the bot points to the MOM helpline instead of guessing. Policy fact-checks of
+  forwarded claims still run on `/process`; they are a separate conversation.
 
 The read gate is stricter than the image gate — `MIN_CONFIDENCE` 0.7 vs 0.6 — because a
 misread salary figure gets quoted back as fact to someone who can't verify it.
 
-**Contract mode.** Uploading a contract puts that sender into contract mode: their typed
-messages become questions about the document rather than claims to verify. Forwarded
-voice notes and images still go through verification, so the worker can check a
-suspicious message without losing the contract. Sending `done` (or `exit`, `stop`,
-`back`, `cancel`) leaves the mode and forgets the document.
+WhatsApp photos go to `handleImage`; PDFs sent as files go to `handleDocument`. Both
+can enter contract mode when the reader marks the file as a usable employment
+document.
 
 ## Setup
 
-1. Install dependencies:
+1. Install Node dependencies:
 
    ```bash
    nvm use 22
    npm install
    ```
 
-2. Confirm `.env` has your credentials (already present):
+2. Confirm `.env` has:
 
    - `number_ID` — WhatsApp phone number ID
    - `access_token` — Meta access token
    - `VERIFY_TOKEN` — any string; must match what you enter in the Meta dashboard
-   - `PORT` — local port (default 3000)
+   - `PORT` — local bot port (default 3000)
+   - `PIPELINE_URL` — Python service (default `http://127.0.0.1:8000`)
+   - `CLAUDE_API_KEY` — Anthropic key used by the pipeline
+   - `POSTGRES_*` or `DATABASE_URL` — corpus database
 
-3. Start the server:
+3. Start the bot (needs the pipeline running too — next section):
 
    ```bash
    npm start
@@ -318,7 +350,7 @@ suspicious message without losing the contract. Sending `done` (or `exit`, `stop
 
 The WhatsApp bot (Node) and the verification pipeline (Python) run as two
 processes. The bot POSTs each forwarded message to the pipeline service and
-replies with the extracted claims.
+replies with the composed verdict (or the contract answer).
 
 ```bash
 # 1. Postgres (corpus)
@@ -330,18 +362,23 @@ uvicorn app.webhook:app --host 127.0.0.1 --port 8000
 
 # 3. WhatsApp bot (Node), in another terminal
 npm start
+
+# 4. Public HTTPS tunnel for Meta (another terminal)
+npx ngrok http 3000
 ```
 
 Flow: a user messages the bot → picks a language → sends a voice note, image, or
-text. Voice goes through Whisper ASR first; then every path runs translate → route →
-claim extraction → Postgres retrieve → LLM true/false and the bot replies with the
-verdict. Scam-looking messages get a warning; messages with no checkable claim get
-the MOM hotline template. The bot talks to the pipeline at `PIPELINE_URL`
-(default `http://127.0.0.1:8000`).
+text. Voice goes through Whisper ASR first; then every *policy* path runs translate
+→ route → claim extraction → Postgres retrieve → LLM true/false. Scam-looking
+messages get a warning; messages with no checkable claim get the MOM hotline
+template. Contract-like questions prompt for the file, then Q&A stays on that
+document. The bot talks to the pipeline at `PIPELINE_URL`.
 
 > Note: outbound replies require a valid WhatsApp `access_token` in `.env`.
-> A `401 Authentication Error` in the logs means the token has expired — refresh
-> it in the Meta dashboard.
+> A `401 Authentication Error` (Meta code 190) in the logs means the token has
+> expired or cannot be decrypted — paste a fresh token from the Meta dashboard
+> and restart `npm start`. Port 8000 already in use: stop the old uvicorn
+> process before starting another.
 
 ## Connect the webhook to Meta
 
@@ -362,6 +399,16 @@ Then in the **Meta App Dashboard → WhatsApp → Configuration → Webhook**:
 From one of your registered test numbers, send any message (e.g. "Hi Echo!") to the bot number.
 You should receive the "Choose language" list. Tapping a language sends back a confirmation.
 
+Typical contract-mode check:
+
+1. After choosing a language, send *“What is my salary, according to my contract?”*
+   — the bot should ask you to send the contract, not fact-check MOM policy.
+2. Send the PDF (or page photos).
+3. You should get an answer from the document, plus “I'll keep this contract…”.
+4. Ask a follow-up (*“What does the passport section say?”*) — same held text,
+   no re-upload.
+5. Send `done` to leave contract mode.
+
 ### Automated tests
 
 The suite exists so the text and voice features can be verified **without** access to
@@ -371,13 +418,16 @@ the Meta webhook. Everything except the two calls to Meta's servers is covered.
 pip install -r requirements.txt -r requirements-dev.txt
 
 pytest                # unit: no network, no model weights, ~0.5s
-npm test              # Node: routing + handlers, fetch stubbed in-process, ~0.1s
+npm test              # Node: routing + handlers, fetch stubbed in-process
 pytest --live         # real Claude API + real Whisper, ~2 min, costs tokens
 ```
 
 `pytest` and `npm test` are free and fast — run them on every change. `pytest --live`
 is the acceptance check: it answers "does translation actually work", using real API
 calls and real audio.
+
+If `npm test` hangs, a leftover Node listener on the ephemeral test port is usually
+the cause. Kill it and rerun (`npm test` already passes `--test-force-exit`).
 
 Voice fixtures are synthesised at run time with macOS `say` and transcoded to
 OGG/Opus with PyAV — the same container WhatsApp sends. No ffmpeg, no committed audio.
@@ -403,9 +453,13 @@ What each file covers:
 - `tests/test_vision_unit.py` — the image gate, media-type and size validation, prompt shape
 - `tests/test_contract_unit.py` — the contract usability gate, PDF vs image blocks, prompt rules
 - `tests/test_tts_unit.py` — voice selection, emoji/layout stripping, the length cap
-- `tests/routing.test.js` — boots the real Express app: onboarding, contract mode, dedupe
+- `tests/test_compose_unit.py` — 75-word budget and complete-sentence fitting
+- `tests/test_retrieve_unit.py` — FTS query gen and source-family diversification
+- `tests/test_router_unit.py` — policy vs scam vs neither
+- `tests/routing.test.js` — boots the real Express app: onboarding, contract prompt/hold, `done`
+- `tests/contractQuestion.test.js` — which phrases are contract questions vs policy
 - `tests/whatsapp.test.js` — media upload and the text-plus-voice reply, incl. degradation
-- `tests/test_translate_live.py` — real translation: 4 languages, detail preservation, prompt injection
+- `tests/test_translate_live.py` — real translation: languages, detail preservation, prompt injection
 - `tests/test_voice_live.py` — real audio → Whisper → Claude, through the FastAPI route
 - `tests/test_vision_live.py` — real images → Claude vision → Claude, through the FastAPI route
 - `tests/test_contract_live.py` — real multi-page PDF → Q&A; abstention and the legal boundary
@@ -415,20 +469,22 @@ What each file covers:
 
 ## Files
 
-- `src/index.js` — Express server + webhook (verify + receive), per-sender state, dispatch
-- `src/media.js` — classifies an inbound message: text / image / voice / control / unsupported
-- `src/handlers.js` — one handler per kind: text, voice, image, ignored → verifyText
-- `src/whatsapp.js` — WhatsApp Cloud API send helpers
+- `src/index.js` — Express server + webhook, per-sender session, language gate, contract mode
+- `src/media.js` — classifies an inbound message: text / image / voice / document / control / unsupported
+- `src/handlers.js` — one handler per kind; text, voice, and image converge on `verifyText()`
+- `src/contractQuestion.js` — heuristic: personal contract Q vs MOM policy claim
+- `src/whatsapp.js` — WhatsApp Cloud API send helpers (text, list menu, voice note)
 - `src/pipeline.js` — HTTP client for the Python pipeline + reply formatting
-- `src/languages.js` — the six language options
+- `src/languages.js` — six language options and UI strings (welcome, checking, send-contract)
 - `pipeline/asr.py` — faster-whisper speech to text + confidence (policy.md §1 stage 1)
 - `pipeline/vision.py` — read text out of an image + confidence (stage 1, image path)
 - `pipeline/llm.py` — Claude client, schema-enforced structured output
 - `pipeline/translate.py` · `router.py` · `claims.py` · `retrieve.py` · `verify.py` · `scam.py` — stages 2–9 + scam stub
+- `pipeline/compose.py` — stage 10: worker-facing reply + localisation
 - `pipeline/contract.py` — read an employment contract + grounded Q&A (specs.md §2)
 - `pipeline/tts.py` — speak a reply as an OGG/Opus voice note (specs.md §2)
 - `pipeline/pipeline.py` — orchestrator (message → verified claims)
-- `app/webhook.py` — FastAPI service (`/transcribe`, `/extract`, `/translate`, `/process`, `/contract`, `/contract/ask`)
+- `app/webhook.py` — FastAPI service (`/transcribe`, `/extract`, `/translate`, `/process`, `/speak`, `/contract`, `/contract/ask`)
 - `app/api.py` — re-exports `app.webhook:app` for compatibility
 - `db/schema.sql` — Postgres corpus schema (documents + chunks)
 - `db/connection.py` — psycopg connection helpers (config from `.env`)
@@ -438,6 +494,3 @@ What each file covers:
 - `ingest/fetch.py` — fetch → chunk → upsert into Postgres
 - `ingest/chunker.py` — heading-aware, list-safe chunking
 - `tests/` — see [Automated tests](#automated-tests); `conftest.py` synthesises voice fixtures
-- `pipeline/llm.py` — Claude client, schema-enforced structured output
-- `pipeline/translate.py` · `router.py` · `claims.py` · `retrieve.py` · `verify.py` · `scam.py` — stages 2–9 + scam stub
-- `pipeline/pipeline.py` — orchestrator (message → verified claims)
